@@ -113,21 +113,91 @@ export const PROVIDER_CAPABILITIES = {
     "deepseek-v3-2-volc": { reasoning: true, thinkingFormat: "openai", thinkingCanDisable: false, contextWindow: 96000, maxOutput: 32000 },
   },
 
-  // Alibaba Intl (DashScope coding-intl gateway) — same model lineup as CodeBuddy CN
-  // (GLM, Kimi, MiniMax, DeepSeek, Qwen3-coder) exposed via OpenAI-compatible API.
+  // Alibaba Intl (DashScope compatible-mode gateway) — native provider with full catalog.
   // All reasoning models take OpenAI-style reasoning_effort; without this flag the
-  // router omits reasoning params, GLM-5.2 emits thinking-only deltas, and the
+  // router omits reasoning params, reasoning models emit thinking-only deltas, and the
   // final response body has an empty `content` field.
   "alicode-intl": {
+    // GLM (reasoning)
     "glm-5.2":          { reasoning: true, thinkingFormat: "openai", thinkingCanDisable: false, contextWindow: 1000000, maxOutput: 48000 },
     "glm-5.1":          { reasoning: true, thinkingFormat: "openai", thinkingCanDisable: false, contextWindow: 200000, maxOutput: 48000 },
     "glm-5":            { reasoning: true, thinkingFormat: "openai", contextWindow: 200000, maxOutput: 48000 },
     "glm-4.7":          { reasoning: true, thinkingFormat: "openai", contextWindow: 200000, maxOutput: 48000 },
-    "kimi-k2.5":        { vision: true, reasoning: true, thinkingFormat: "openai", thinkingCanDisable: false, contextWindow: 164000, maxOutput: 32000 },
+    // Qwen 3.7 (reasoning)
+    "qwen3.7-max-2026-06-08": { reasoning: true, thinkingFormat: "openai", thinkingCanDisable: false, contextWindow: 1000000, maxOutput: 48000 },
+    "qwen3.7-max-2026-05-20": { reasoning: true, thinkingFormat: "openai", thinkingCanDisable: false, contextWindow: 1000000, maxOutput: 48000 },
+    "qwen3.7-max-2026-05-17": { reasoning: true, thinkingFormat: "openai", thinkingCanDisable: false, contextWindow: 1000000, maxOutput: 48000 },
+    "qwen3.7-max-preview":    { reasoning: true, thinkingFormat: "openai", thinkingCanDisable: false, contextWindow: 1000000, maxOutput: 48000 },
+    "qwen3.7-max":            { reasoning: true, thinkingFormat: "openai", thinkingCanDisable: false, contextWindow: 1000000, maxOutput: 48000 },
+    "qwen3.7-plus-2026-05-26": { reasoning: true, thinkingFormat: "openai", thinkingCanDisable: false, contextWindow: 131072, maxOutput: 48000 },
+    "qwen3.7-plus":            { reasoning: true, thinkingFormat: "openai", thinkingCanDisable: false, contextWindow: 131072, maxOutput: 48000 },
+    // Qwen 3.6
+    "qwen3.6-max-preview":     { reasoning: true, thinkingFormat: "openai", contextWindow: 1000000, maxOutput: 48000 },
+    "qwen3.6-plus-2026-04-02": { reasoning: true, thinkingFormat: "openai", contextWindow: 131072, maxOutput: 48000 },
+    "qwen3.6-plus":            { reasoning: true, thinkingFormat: "openai", contextWindow: 131072, maxOutput: 48000 },
+    "qwen3.6-35b-a3b":         { reasoning: true, thinkingFormat: "openai", contextWindow: 131072, maxOutput: 32000 },
+    "qwen3.6-27b":             { reasoning: true, thinkingFormat: "openai", contextWindow: 131072, maxOutput: 32000 },
+    "qwen3.6-flash-2026-04-16": { contextWindow: 131072, maxOutput: 32000 },
+    "qwen3.6-flash":            { contextWindow: 131072, maxOutput: 32000 },
+    // Qwen 3.5
+    "qwen3.5-plus-2026-04-20": { reasoning: true, thinkingFormat: "openai", thinkingCanDisable: false, contextWindow: 131072, maxOutput: 48000 },
+    "qwen3.5-plus-2026-02-15": { reasoning: true, thinkingFormat: "openai", thinkingCanDisable: false, contextWindow: 131072, maxOutput: 48000 },
+    "qwen3.5-plus":            { reasoning: true, thinkingFormat: "openai", thinkingCanDisable: false, contextWindow: 131072, maxOutput: 48000 },
+    "qwen3.5-flash-2026-02-23": { contextWindow: 131072, maxOutput: 32000 },
+    "qwen3.5-flash":            { contextWindow: 131072, maxOutput: 32000 },
+    "qwen3.5-397b-a17b":       { reasoning: true, thinkingFormat: "openai", contextWindow: 131072, maxOutput: 32000 },
+    "qwen3.5-122b-a10b":       { reasoning: true, thinkingFormat: "openai", contextWindow: 131072, maxOutput: 32000 },
+    "qwen3.5-35b-a3b":         { reasoning: true, thinkingFormat: "openai", contextWindow: 131072, maxOutput: 32000 },
+    "qwen3.5-27b":             { reasoning: true, thinkingFormat: "openai", contextWindow: 131072, maxOutput: 32000 },
+    // Qwen 3
+    "qwen3-max-2026-01-23":     { reasoning: true, thinkingFormat: "openai", contextWindow: 131072, maxOutput: 48000 },
+    "qwen3-max-preview":        { reasoning: true, thinkingFormat: "openai", contextWindow: 131072, maxOutput: 48000 },
+    "qwen3-max":                { reasoning: true, thinkingFormat: "openai", contextWindow: 131072, maxOutput: 48000 },
+    "qwen3-coder-next":         { reasoning: true, thinkingFormat: "openai", thinkingCanDisable: false, contextWindow: 256000, maxOutput: 32000 },
+    "qwen3-coder-plus-2025-09-23": { reasoning: true, thinkingFormat: "openai", thinkingCanDisable: false, contextWindow: 256000, maxOutput: 32000 },
+    "qwen3-coder-plus-2025-07-22": { reasoning: true, thinkingFormat: "openai", thinkingCanDisable: false, contextWindow: 256000, maxOutput: 32000 },
+    "qwen3-coder-plus":         { reasoning: true, thinkingFormat: "openai", thinkingCanDisable: false, contextWindow: 256000, maxOutput: 32000 },
+    "qwen3-coder-flash":        { reasoning: true, thinkingFormat: "openai", contextWindow: 256000, maxOutput: 32000 },
+    "qwen3-coder-480b-a35b-instruct": { reasoning: true, thinkingFormat: "openai", contextWindow: 256000, maxOutput: 32000 },
+    "qwen3-235b-a22b-instruct-2507":  { reasoning: true, thinkingFormat: "openai", contextWindow: 131072, maxOutput: 32000 },
+    "qwen3-235b-a22b-thinking-2507":  { reasoning: true, thinkingFormat: "openai", thinkingCanDisable: false, contextWindow: 131072, maxOutput: 32000 },
+    "qwen3-235b-a22b":          { reasoning: true, thinkingFormat: "openai", contextWindow: 131072, maxOutput: 32000 },
+    "qwen3-30b-a3b-instruct-2507":    { reasoning: true, thinkingFormat: "openai", contextWindow: 131072, maxOutput: 32000 },
+    "qwen3-30b-a3b-thinking-2507":    { reasoning: true, thinkingFormat: "openai", thinkingCanDisable: false, contextWindow: 131072, maxOutput: 32000 },
+    "qwen3-30b-a3b":            { reasoning: true, thinkingFormat: "openai", contextWindow: 131072, maxOutput: 32000 },
+    "qwen3-32b":                { reasoning: true, thinkingFormat: "openai", contextWindow: 131072, maxOutput: 32000 },
+    "qwen3-14b":                { reasoning: true, thinkingFormat: "openai", contextWindow: 131072, maxOutput: 32000 },
+    "qwen3-8b":                 { contextWindow: 131072, maxOutput: 32000 },
+    "qwen3-next-80b-a3b-thinking":  { reasoning: true, thinkingFormat: "openai", thinkingCanDisable: false, contextWindow: 131072, maxOutput: 32000 },
+    "qwen3-next-80b-a3b-instruct":  { reasoning: true, thinkingFormat: "openai", contextWindow: 131072, maxOutput: 32000 },
+    // Qwen legacy
+    "qwen-max":        { contextWindow: 131072, maxOutput: 8192 },
+    "qwen-plus-latest": { contextWindow: 131072, maxOutput: 8192 },
+    "qwen-plus":        { contextWindow: 131072, maxOutput: 8192 },
+    "qwen-turbo":       { contextWindow: 131072, maxOutput: 8192 },
+    "qwen-flash":       { contextWindow: 131072, maxOutput: 8192 },
+    // QwQ (reasoning)
+    "qwq-plus-2025-03-05": { reasoning: true, thinkingFormat: "openai", thinkingCanDisable: false, contextWindow: 131072, maxOutput: 32000 },
+    "qwq-plus":            { reasoning: true, thinkingFormat: "openai", thinkingCanDisable: false, contextWindow: 131072, maxOutput: 32000 },
+    "qvq-max":             { vision: true, reasoning: true, thinkingFormat: "openai", contextWindow: 131072, maxOutput: 32000 },
+    // DeepSeek (reasoning)
+    "deepseek-v4-pro":  { vision: true, reasoning: true, thinkingFormat: "openai", thinkingCanDisable: false, contextWindow: 1000000, maxOutput: 50000 },
+    "deepseek-v4-flash": { vision: true, reasoning: true, thinkingFormat: "openai", thinkingCanDisable: false, contextWindow: 1000000, maxOutput: 50000 },
+    "deepseek-v3.2":    { reasoning: true, thinkingFormat: "openai", thinkingCanDisable: false, contextWindow: 96000, maxOutput: 32000 },
+    // Kimi (reasoning)
+    "kimi-k2.7-code":   { vision: true, reasoning: true, thinkingFormat: "openai", thinkingCanDisable: false, contextWindow: 256000, maxOutput: 32000 },
+    // MiniMax (reasoning)
     "MiniMax-M2.5":     { vision: true, reasoning: true, thinkingFormat: "openai", thinkingCanDisable: false, contextWindow: 200000, maxOutput: 48000 },
-    "qwen3-coder-next": { reasoning: true, thinkingFormat: "openai", thinkingCanDisable: false, contextWindow: 256000, maxOutput: 32000 },
-    "qwen3-coder-plus": { reasoning: true, thinkingFormat: "openai", thinkingCanDisable: false, contextWindow: 256000, maxOutput: 32000 },
-    "qwen3.5-plus":     { reasoning: true, thinkingFormat: "openai", thinkingCanDisable: false, contextWindow: 131072, maxOutput: 48000 },
+    // Qwen-VL (vision)
+    "qwen3-vl-235b-a22b-instruct": { vision: true, reasoning: true, contextWindow: 131072, maxOutput: 32000 },
+    "qwen3-vl-235b-a22b-thinking": { vision: true, reasoning: true, thinkingCanDisable: false, contextWindow: 131072, maxOutput: 32000 },
+    "qwen3-vl-plus":     { vision: true, reasoning: true, contextWindow: 131072, maxOutput: 32000 },
+    "qwen3-vl-flash":    { vision: true, contextWindow: 131072, maxOutput: 32000 },
+    "qwen-vl-max":       { vision: true, contextWindow: 131072, maxOutput: 8192 },
+    "qwen-vl-plus":      { vision: true, contextWindow: 131072, maxOutput: 8192 },
+    // Embedding
+    "text-embedding-v4": { contextWindow: 8192 },
+    "text-embedding-v3": { contextWindow: 8192 },
   },
 };
 

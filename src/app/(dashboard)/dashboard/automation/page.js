@@ -304,6 +304,7 @@ function CodeBuddyAutomationPanel({ providerInfo, onRefresh, disabled = false })
 function CodeBuddyCnAutomationPanel({ providerInfo, onRefresh, disabled = false }) {
   const [isOAuthOpen, setIsOAuthOpen] = useState(false);
   const [isBulkOpen, setIsBulkOpen] = useState(false);
+  const [isWrapOpen, setIsWrapOpen] = useState(false);
 
   return (
     <>
@@ -336,6 +337,20 @@ function CodeBuddyCnAutomationPanel({ providerInfo, onRefresh, disabled = false 
             Register CodeBuddy CN accounts with isolated Camoufox workers and your 5sim API key.
           </span>
         </button>
+        <button
+          type="button"
+          onClick={() => setIsWrapOpen(true)}
+          disabled={disabled}
+          className={getAutomationCardClasses(disabled)}
+        >
+          <span className="flex items-center gap-2 text-sm font-semibold text-text-main">
+            <span className="material-symbols-outlined text-[20px] text-primary">vpn_lock</span>
+            Proxy Login
+          </span>
+          <span className="text-xs leading-relaxed text-text-muted">
+            Open the CodeBuddy CN login through an active proxy pool. Upstream account restrictions are reported, not hidden.
+          </span>
+        </button>
       </div>
       <OAuthModal
         isOpen={isOAuthOpen && !disabled}
@@ -352,6 +367,13 @@ function CodeBuddyCnAutomationPanel({ providerInfo, onRefresh, disabled = false 
         disabled={disabled}
         onSuccess={onRefresh}
         onClose={() => setIsBulkOpen(false)}
+      />
+      <CodeBuddyCnAutomationModal
+        isOpen={isWrapOpen && !disabled}
+        disabled={disabled}
+        mode="wrap-login"
+        onSuccess={onRefresh}
+        onClose={() => setIsWrapOpen(false)}
       />
     </>
   );
@@ -440,8 +462,8 @@ const AUTOMATION_PROVIDERS = [
   {
     id: "codebuddy-cn",
     label: "CodeBuddy CN",
-    description: "Device OAuth and 5sim-assisted bulk registration automation.",
-    supportedModes: ["oauth", "5sim-bulk"],
+    description: "Device OAuth, 5sim-assisted bulk registration, and proxy-routed browser login.",
+    supportedModes: ["oauth", "5sim-bulk", "wrap-login"],
     component: CodeBuddyCnAutomationPanel,
   },
 ];
@@ -449,7 +471,13 @@ const AUTOMATION_PROVIDERS = [
 export default function AutomationPage() {
   const [connections, setConnections] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [activeProviderId, setActiveProviderId] = useState(AUTOMATION_PROVIDERS[0].id);
+  const [activeProviderId, setActiveProviderId] = useState(() => {
+    if (typeof window === "undefined") return AUTOMATION_PROVIDERS[0].id;
+    const requested = new URLSearchParams(window.location.search).get("provider");
+    return AUTOMATION_PROVIDERS.some((provider) => provider.id === requested)
+      ? requested
+      : AUTOMATION_PROVIDERS[0].id;
+  });
 
   const fetchConnections = useCallback(async () => {
     try {
@@ -464,16 +492,10 @@ export default function AutomationPage() {
   }, []);
 
   useEffect(() => {
-    fetchConnections();
+    // The async callback updates state after I/O, not synchronously in the effect.
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- fetchConnections updates only after the network request settles.
+    void fetchConnections();
   }, [fetchConnections]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const requestedProvider = new URLSearchParams(window.location.search).get("provider");
-    if (AUTOMATION_PROVIDERS.some((provider) => provider.id === requestedProvider)) {
-      setActiveProviderId(requestedProvider);
-    }
-  }, []);
 
   const activeProvider = AUTOMATION_PROVIDERS.find((provider) => provider.id === activeProviderId) || AUTOMATION_PROVIDERS[0];
   const providerInfo = AI_PROVIDERS[activeProvider.id] || { id: activeProvider.id, name: activeProvider.label };

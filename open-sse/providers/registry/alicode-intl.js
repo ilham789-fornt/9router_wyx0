@@ -1,3 +1,12 @@
+// Alibaba Cloud Model Studio (DashScope) — International region (Singapore).
+// Native provider: all models are baked into the registry, no manual UI setup needed.
+//
+// Endpoint: https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions
+// Docs: https://help.aliyun.com/zh/model-studio/developer-reference/use-qwen-by-calling-api
+//
+// All reasoning models (GLM-5.x, Kimi, MiniMax, DeepSeek, Qwen3.x) take OpenAI-style
+// reasoning_effort. forceStream is required because DashScope returns empty `content`
+// for reasoning models when stream:false — the router reconstructs JSON from SSE.
 export default {
   id: "alicode-intl",
   priority: 10,
@@ -14,29 +23,162 @@ export default {
   },
   category: "apikey",
   transport: {
-    baseUrl: "https://coding-intl.dashscope.aliyuncs.com/v1/chat/completions",
-    // DashScope's OpenAI-compatible gateway routes reasoning models (GLM-5.x,
-    // Kimi, MiniMax, DeepSeek) through a unified OpenAI-style reasoning_effort
-    // parameter — same as CodeBuddy CN. Without this flag the router treats the
-    // provider as a plain OpenAI endpoint, GLM-5.2 returns thinking-only output,
-    // and the response body's `content` field ends up empty.
+    baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions",
     thinkingFormat: "openai",
-    // DashScope returns empty `content` for reasoning models when stream:false.
-    // Force streaming so the router receives SSE deltas (with both
-    // reasoning_content + content) and reconstructs a full JSON response via
-    // parseSSEToOpenAIResponse. Same pattern as codebuddy-cn.
     forceStream: true,
     headers: {},
   },
   models: [
+    // ── GLM (reasoning) ──
     { id: "glm-5.2",          name: "GLM 5.2" },
     { id: "glm-5.1",          name: "GLM 5.1" },
     { id: "glm-5",            name: "GLM 5" },
     { id: "glm-4.7",          name: "GLM 4.7" },
-    { id: "kimi-k2.5",        name: "Kimi K2.5" },
-    { id: "MiniMax-M2.5",     name: "MiniMax M2.5" },
-    { id: "qwen3-coder-next", name: "Qwen3 Coder Next" },
-    { id: "qwen3-coder-plus", name: "Qwen3 Coder Plus" },
-    { id: "qwen3.5-plus",     name: "Qwen3.5 Plus" },
+    // ── Qwen 3.7 (reasoning) ──
+    { id: "qwen3.7-max-2026-06-08", name: "Qwen3.7 Max (2026-06-08)" },
+    { id: "qwen3.7-max-2026-05-20", name: "Qwen3.7 Max (2026-05-20)" },
+    { id: "qwen3.7-max-2026-05-17", name: "Qwen3.7 Max (2026-05-17)" },
+    { id: "qwen3.7-max-preview",    name: "Qwen3.7 Max Preview" },
+    { id: "qwen3.7-max",            name: "Qwen3.7 Max" },
+    { id: "qwen3.7-plus-2026-05-26", name: "Qwen3.7 Plus (2026-05-26)" },
+    { id: "qwen3.7-plus",            name: "Qwen3.7 Plus" },
+    // ── Qwen 3.6 ──
+    { id: "qwen3.6-max-preview", name: "Qwen3.6 Max Preview" },
+    { id: "qwen3.6-plus-2026-04-02", name: "Qwen3.6 Plus (2026-04-02)" },
+    { id: "qwen3.6-plus",          name: "Qwen3.6 Plus" },
+    { id: "qwen3.6-35b-a3b",       name: "Qwen3.6 35B A3B" },
+    { id: "qwen3.6-27b",           name: "Qwen3.6 27B" },
+    { id: "qwen3.6-flash-2026-04-16", name: "Qwen3.6 Flash (2026-04-16)" },
+    { id: "qwen3.6-flash",          name: "Qwen3.6 Flash" },
+    // ── Qwen 3.5 ──
+    { id: "qwen3.5-plus-2026-04-20", name: "Qwen3.5 Plus (2026-04-20)" },
+    { id: "qwen3.5-plus-2026-02-15", name: "Qwen3.5 Plus (2026-02-15)" },
+    { id: "qwen3.5-plus",            name: "Qwen3.5 Plus" },
+    { id: "qwen3.5-flash-2026-02-23", name: "Qwen3.5 Flash (2026-02-23)" },
+    { id: "qwen3.5-flash",           name: "Qwen3.5 Flash" },
+    { id: "qwen3.5-397b-a17b",       name: "Qwen3.5 397B A17B" },
+    { id: "qwen3.5-122b-a10b",       name: "Qwen3.5 122B A10B" },
+    { id: "qwen3.5-35b-a3b",         name: "Qwen3.5 35B A3B" },
+    { id: "qwen3.5-27b",             name: "Qwen3.5 27B" },
+    // ── Qwen 3 ──
+    { id: "qwen3-max-2026-01-23",     name: "Qwen3 Max (2026-01-23)" },
+    { id: "qwen3-max-preview",        name: "Qwen3 Max Preview" },
+    { id: "qwen3-max",                name: "Qwen3 Max" },
+    { id: "qwen3-coder-next",         name: "Qwen3 Coder Next" },
+    { id: "qwen3-coder-plus-2025-09-23", name: "Qwen3 Coder Plus (2025-09-23)" },
+    { id: "qwen3-coder-plus-2025-07-22", name: "Qwen3 Coder Plus (2025-07-22)" },
+    { id: "qwen3-coder-plus",         name: "Qwen3 Coder Plus" },
+    { id: "qwen3-coder-flash",        name: "Qwen3 Coder Flash" },
+    { id: "qwen3-coder-480b-a35b-instruct", name: "Qwen3 Coder 480B A35B Instruct" },
+    { id: "qwen3-235b-a22b-instruct-2507",  name: "Qwen3 235B A22B Instruct (2507)" },
+    { id: "qwen3-235b-a22b-thinking-2507",  name: "Qwen3 235B A22B Thinking (2507)" },
+    { id: "qwen3-235b-a22b",          name: "Qwen3 235B A22B" },
+    { id: "qwen3-30b-a3b-instruct-2507",    name: "Qwen3 30B A3B Instruct (2507)" },
+    { id: "qwen3-30b-a3b-thinking-2507",    name: "Qwen3 30B A3B Thinking (2507)" },
+    { id: "qwen3-30b-a3b",            name: "Qwen3 30B A3B" },
+    { id: "qwen3-32b",                name: "Qwen3 32B" },
+    { id: "qwen3-14b",                name: "Qwen3 14B" },
+    { id: "qwen3-8b",                 name: "Qwen3 8B" },
+    { id: "qwen3-next-80b-a3b-thinking",  name: "Qwen3 Next 80B A3B Thinking" },
+    { id: "qwen3-next-80b-a3b-instruct",  name: "Qwen3 Next 80B A3B Instruct" },
+    // ── Qwen legacy ──
+    { id: "qwen-max",        name: "Qwen Max" },
+    { id: "qwen-plus-2025-12-01", name: "Qwen Plus (2025-12-01)" },
+    { id: "qwen-plus-2025-09-11", name: "Qwen Plus (2025-09-11)" },
+    { id: "qwen-plus-2025-07-14", name: "Qwen Plus (2025-07-14)" },
+    { id: "qwen-plus-2025-04-28", name: "Qwen Plus (2025-04-28)" },
+    { id: "qwen-plus-2025-01-25", name: "Qwen Plus (2025-01-25)" },
+    { id: "qwen-plus-latest",     name: "Qwen Plus Latest" },
+    { id: "qwen-plus",            name: "Qwen Plus" },
+    { id: "qwen-plus-character",  name: "Qwen Plus Character" },
+    { id: "qwen-turbo",           name: "Qwen Turbo" },
+    { id: "qwen-flash-character", name: "Qwen Flash Character" },
+    { id: "qwen-flash",           name: "Qwen Flash" },
+    { id: "qwen2-7b-instruct",    name: "Qwen2 7B Instruct" },
+    // ── QwQ (reasoning) ──
+    { id: "qwq-plus-2025-03-05", name: "QwQ Plus (2025-03-05)" },
+    { id: "qwq-plus",            name: "QwQ Plus" },
+    { id: "qvq-max",             name: "QvQ Max" },
+    // ── DeepSeek (reasoning) ──
+    { id: "deepseek-v4-pro",  name: "DeepSeek V4 Pro" },
+    { id: "deepseek-v4-flash", name: "DeepSeek V4 Flash" },
+    { id: "deepseek-v3.2",    name: "DeepSeek V3.2" },
+    // ── Kimi (reasoning) ──
+    { id: "kimi-k2.7-code", name: "Kimi K2.7 Code" },
+    // ── MiniMax (reasoning) ──
+    { id: "MiniMax-M2.5", name: "MiniMax M2.5" },
+    // ── CCAI ──
+    { id: "ccai-pro",          name: "CCAI Pro" },
+    { id: "tongyi-tingwu-slp", name: "Tongyi Tingwu SLP" },
+    // ── Qwen-VL (vision) ──
+    { id: "qwen3-vl-235b-a22b-instruct", name: "Qwen3 VL 235B A22B Instruct" },
+    { id: "qwen3-vl-235b-a22b-thinking", name: "Qwen3 VL 235B A22B Thinking" },
+    { id: "qwen3-vl-plus-2025-12-19",    name: "Qwen3 VL Plus (2025-12-19)" },
+    { id: "qwen3-vl-plus-2025-09-23",    name: "Qwen3 VL Plus (2025-09-23)" },
+    { id: "qwen3-vl-plus",               name: "Qwen3 VL Plus" },
+    { id: "qwen3-vl-flash-2026-01-22",   name: "Qwen3 VL Flash (2026-01-22)" },
+    { id: "qwen3-vl-flash-2025-10-15",   name: "Qwen3 VL Flash (2025-10-15)" },
+    { id: "qwen3-vl-flash",              name: "Qwen3 VL Flash" },
+    { id: "qwen-vl-max",                 name: "Qwen VL Max" },
+    { id: "qwen-vl-plus",                name: "Qwen VL Plus" },
+    { id: "qwen-vl-ocr-2025-11-20",      name: "Qwen VL OCR (2025-11-20)" },
+    // ── Qwen-Omni (multimodal realtime) ──
+    { id: "qwen3.5-omni-plus-realtime-2026-03-15", name: "Qwen3.5 Omni Plus Realtime (2026-03-15)" },
+    { id: "qwen3.5-omni-plus-realtime",            name: "Qwen3.5 Omni Plus Realtime" },
+    { id: "qwen3.5-omni-plus-2026-03-15",          name: "Qwen3.5 Omni Plus (2026-03-15)" },
+    { id: "qwen3.5-omni-plus",                     name: "Qwen3.5 Omni Plus" },
+    { id: "qwen3.5-omni-flash-realtime-2026-03-15", name: "Qwen3.5 Omni Flash Realtime (2026-03-15)" },
+    { id: "qwen3.5-omni-flash-realtime",            name: "Qwen3.5 Omni Flash Realtime" },
+    { id: "qwen3.5-omni-flash-2026-03-15",          name: "Qwen3.5 Omni Flash (2026-03-15)" },
+    { id: "qwen3.5-omni-flash",                     name: "Qwen3.5 Omni Flash" },
+    { id: "qwen3-omni-flash-realtime-2025-12-01",   name: "Qwen3 Omni Flash Realtime (2025-12-01)" },
+    { id: "qwen3-omni-flash-realtime-2025-09-15",   name: "Qwen3 Omni Flash Realtime (2025-09-15)" },
+    { id: "qwen3-omni-flash-realtime",              name: "Qwen3 Omni Flash Realtime" },
+    { id: "qwen3-omni-flash-2025-12-01",            name: "Qwen3 Omni Flash (2025-12-01)" },
+    { id: "qwen3-omni-flash-2025-09-15",            name: "Qwen3 Omni Flash (2025-09-15)" },
+    { id: "qwen3-omni-flash",                       name: "Qwen3 Omni Flash" },
+    { id: "qwen3-omni-30b-a3b-captioner",           name: "Qwen3 Omni 30B A3B Captioner" },
+    { id: "qwen-omni-turbo",                        name: "Qwen Omni Turbo" },
+    // ── Qwen ASR / TTS / MT ──
+    { id: "qwen3-asr-flash-2026-02-10",            name: "Qwen3 ASR Flash (2026-02-10)" },
+    { id: "qwen3-asr-flash-realtime-2026-02-10",   name: "Qwen3 ASR Flash Realtime (2026-02-10)" },
+    { id: "qwen3-asr-flash-realtime-2025-10-27",   name: "Qwen3 ASR Flash Realtime (2025-10-27)" },
+    { id: "qwen3-asr-flash-realtime",              name: "Qwen3 ASR Flash Realtime" },
+    { id: "qwen3-tts-vc-2026-01-22",               name: "Qwen3 TTS VC (2026-01-22)" },
+    { id: "qwen3-tts-vc-realtime-2026-01-15",      name: "Qwen3 TTS VC Realtime (2026-01-15)" },
+    { id: "qwen3-tts-vc-realtime-2025-11-27",      name: "Qwen3 TTS VC Realtime (2025-11-27)" },
+    { id: "qwen3-tts-instruct-flash-2026-01-26",   name: "Qwen3 TTS Instruct Flash (2026-01-26)" },
+    { id: "qwen3-tts-instruct-flash",              name: "Qwen3 TTS Instruct Flash" },
+    { id: "qwen3-tts-instruct-flash-realtime-2026-01-22", name: "Qwen3 TTS Instruct Flash Realtime (2026-01-22)" },
+    { id: "qwen3-tts-instruct-flash-realtime",            name: "Qwen3 TTS Instruct Flash Realtime" },
+    { id: "qwen3-tts-vd-2026-01-26",               name: "Qwen3 TTS VD (2026-01-26)" },
+    { id: "qwen3-tts-vd-realtime-2026-01-15",      name: "Qwen3 TTS VD Realtime (2026-01-15)" },
+    { id: "qwen3-tts-vd-realtime-2025-12-16",      name: "Qwen3 TTS VD Realtime (2025-12-16)" },
+    { id: "qwen3-tts-flash-2026-11-27",            name: "Qwen3 TTS Flash (2026-11-27)" },
+    { id: "qwen3-tts-flash-2025-09-18",            name: "Qwen3 TTS Flash (2025-09-18)" },
+    { id: "qwen3-tts-flash",                       name: "Qwen3 TTS Flash" },
+    { id: "qwen3-tts-flash-realtime-2025-09-18",   name: "Qwen3 TTS Flash Realtime (2025-09-18)" },
+    { id: "qwen3-tts-flash-realtime",              name: "Qwen3 TTS Flash Realtime" },
+    { id: "qwen3-s2s-flash-realtime",              name: "Qwen3 S2S Flash Realtime" },
+    { id: "qwen3-livetranslate-flash-2025-12-01",            name: "Qwen3 LiveTranslate Flash (2025-12-01)" },
+    { id: "qwen3-livetranslate-flash",                       name: "Qwen3 LiveTranslate Flash" },
+    { id: "qwen3-livetranslate-flash-realtime-2025-09-22",   name: "Qwen3 LiveTranslate Flash Realtime (2025-09-22)" },
+    { id: "qwen3-livetranslate-flash-realtime",              name: "Qwen3 LiveTranslate Flash Realtime" },
+    { id: "qwen3.5-livetranslate-flash-realtime-2026-05-19", name: "Qwen3.5 LiveTranslate Flash Realtime (2026-05-19)" },
+    { id: "qwen3.5-livetranslate-flash-realtime",            name: "Qwen3.5 LiveTranslate Flash Realtime" },
+    { id: "qwen-mt-flash", name: "Qwen MT Flash" },
+    { id: "qwen-mt-lite",  name: "Qwen MT Lite" },
+    { id: "qwen-mt-plus",  name: "Qwen MT Plus" },
+    { id: "qwen-mt-turbo", name: "Qwen MT Turbo" },
+    // ── Embedding ──
+    { id: "text-embedding-v4", name: "Text Embedding V4", kind: "embedding" },
+    { id: "text-embedding-v3", name: "Text Embedding V3", kind: "embedding" },
   ],
+  features: {
+    usage: true,
+  },
+  modelsFetcher: {
+    url: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models",
+    type: "alicode-intl",
+  },
 };

@@ -15,6 +15,8 @@ import {
   CN_FALLBACK_REGION,
 } from "open-sse/executors/codebuddy-cn/config.js";
 import { runCodeBuddyCnLifecycle } from "./codebuddyCnLifecycle.js";
+import { detectCodeBuddyCnRestriction } from "./codebuddyCnBypass.js";
+import { resolveBulkImportProxy } from "./bulkImportProxyResolver.js";
 
 const CODEBUDDY_CN_AUTOMATION_DIR = path.join(DATA_DIR, "codebuddy-cn-automation");
 const CODEBUDDY_CN_META_FILE = path.join(CODEBUDDY_CN_AUTOMATION_DIR, "meta.json");
@@ -291,7 +293,23 @@ function sanitizeJob(job, extras = {}) {
     finishedAt: job.finishedAt,
     concurrency: job.concurrency,
     browser: job.browserChoice || DEFAULT_AUTOMATION_BROWSER,
-    options: { ...job.options },
+    options: {
+      fiveSimCountry: job.options?.fiveSimCountry,
+      fiveSimOperator: job.options?.fiveSimOperator,
+      fiveSimProduct: job.options?.fiveSimProduct,
+      useProxy: job.options?.useProxy === true,
+      maxRetries: job.options?.maxRetries,
+      useAllBalance: job.options?.useAllBalance === true,
+      smsTimeoutMs: job.options?.smsTimeoutMs,
+      pollIntervalMs: job.options?.pollIntervalMs,
+      wrapLogin: job.options?.wrapLogin === true,
+      proxyPoolId: job.options?.proxyPoolId || null,
+      proxySource: job.options?.proxySource || null,
+      proxyMode: job.options?.proxyMode || "none",
+      headless: job.options?.headless !== false,
+      hasFiveSimApiKey: Boolean(job.options?.fiveSimApiKey),
+      hasProxy: Boolean(job.options?.proxyUrl),
+    },
     summary: buildSummary(job.accounts),
     accounts: job.accounts.map(sanitizeAccount),
     activity: buildJobActivity(job.accounts),
@@ -306,11 +324,18 @@ function buildPersistedSnapshot(job) {
 
 function normalizePersistedSnapshot(job) {
   if (!job) return null;
-  if (ACTIVE_JOB_STATUSES.has(job.status)) return job;
-  return {
+  const safe = {
     ...job,
-    preview: null,
+    options: {
+      ...(job.options || {}),
+      fiveSimApiKey: undefined,
+      proxyUrl: undefined,
+      hasFiveSimApiKey: Boolean(job.options?.hasFiveSimApiKey || job.options?.fiveSimApiKey),
+      hasProxy: Boolean(job.options?.hasProxy || job.options?.proxyUrl),
+    },
   };
+  if (ACTIVE_JOB_STATUSES.has(safe.status)) return safe;
+  return { ...safe, preview: null };
 }
 
 function isRecentTerminalJob(job) {
@@ -551,28 +576,40 @@ async function codeBuddyCnRequestViaPage(page, method, url, body = null) {
   );
 }
 
-async function createCodeBuddyCnApiKeyViaPage(page) {
-  const result = await codeBuddyCnRequestViaPage(page, "POST", CODEBUDDY_CN_PROBE_URL, {
-    name: createCodeBuddyCnApiKeyName(),
-    expire_in_days: -1,
-  });
+async function createCodeBuddyCnApiKeyViaPage(page, {
+  onStep,
+  maxRetries = 3,
+  backoffMs = 1500,
+  keyName = createCodeBuddyCnApiKeyName(),
+} = {}) {
+  let lastError = null;
+  for (let attempt = 1; attempt <= maxRetries; attempt += 1) {
+    const result = await codeBuddyCnRequestViaPage(page, "POST", CODEBUDDY_CN_PROBE_URL, {
+      name: keyName,
+      expire_in_days: -1,
+    });
 
-  if (result.status !== 200) {
-    throw new Error(`CodeBuddy CN API key creation failed (${result.status}): ${String(result.text || "").slice(0, 180)}`);
+    if (result.status === 200) {
+      const apiKey = String(
+        result?.json?.data?.key
+        || result?.json?.data?.api_key
+        || result?.json?.data?.token
+        || ""
+      ).trim();
+      if (apiKey) return apiKey;
+      lastError = new Error(`CodeBuddy CN API key response missing data.key (attempt ${attempt})`);
+    } else {
+      lastError = new Error(`CodeBuddy CN API key creation failed (${result.status}): ${String(result.text || "").slice(0, 160)}`);
+    }
+
+    const transient = result.status === 0 || result.status === 408 || result.status === 425
+      || result.status === 429 || [500, 502, 503, 504].includes(result.status);
+    if (!transient || attempt >= maxRetries) break;
+    const delay = backoffMs * attempt;
+    onStep?.("api_key_retry", `${lastError.message}; retrying in ${delay}ms`);
+    await wait(delay);
   }
-
-  const apiKey = String(
-    result?.json?.data?.key
-    || result?.json?.data?.api_key
-    || result?.json?.data?.token
-    || ""
-  ).trim();
-
-  if (!apiKey) {
-    throw new Error("CodeBuddy CN API key response did not include data.key");
-  }
-
-  return apiKey;
+  throw lastError || new Error("CodeBuddy CN API key creation failed after retries");
 }
 
 async function clickButtonByText(page, patterns = []) {
@@ -789,27 +826,49 @@ async function findCodeBuddyCnPhoneAuthSurface(page, loginFrame = null) {
 }
 
 async function acceptCodeBuddyCnLoginTerms(loginFrame) {
-  const locatorClicked = await clickFirstVisibleLocator(loginFrame, [
-    "input[type='checkbox']",
-    "label.t-checkbox",
-    ".t-checkbox__former",
-  ], { visibleTimeout: 500, clickTimeout: 2_000 });
+  if (!loginFrame?.evaluate) return false;
 
-  const domClicked = await loginFrame.evaluate(() => {
-    const checkbox = document.querySelector('.t-checkbox__former') ||
-      document.querySelector('input[type="checkbox"]') ||
-      document.querySelector('label.t-checkbox');
-    if (!checkbox) return false;
-    checkbox.click();
-    if (checkbox instanceof HTMLInputElement && !checkbox.checked) {
-      checkbox.checked = true;
-      checkbox.dispatchEvent(new Event('change', { bubbles: true }));
+  const locateAndRead = async ({ click = false } = {}) => await loginFrame.evaluate(({ shouldClick }) => {
+    const patterns = ["我已阅读并同意", "服务条款", "隐私协议", "I have read", "Terms of Service", "Privacy Policy"];
+    const candidates = Array.from(document.querySelectorAll("label.t-checkbox, .t-checkbox, label, [class*='checkbox']"));
+    let target = candidates.find((element) => {
+      const text = String(element.textContent || "");
+      return patterns.some((pattern) => text.includes(pattern));
+    }) || document.querySelector("label.t-checkbox, .t-checkbox, span.t-checkbox__input, input.t-checkbox__former, input[type='checkbox']");
+    if (!target) return { found: false, checked: false };
+
+    const wrapper = target.matches(".t-checkbox, label.t-checkbox")
+      ? target
+      : target.closest(".t-checkbox, label.t-checkbox");
+    const native = target.matches("input[type='checkbox']")
+      ? target
+      : (wrapper || target).querySelector?.("input[type='checkbox'], input.t-checkbox__former");
+    const checked = () => Boolean(
+      native?.checked
+      || target.getAttribute?.("aria-checked") === "true"
+      || wrapper?.classList?.contains("t-is-checked")
+      || wrapper?.getAttribute?.("aria-checked") === "true"
+    );
+
+    if (shouldClick && !checked()) {
+      const clickTarget = wrapper || target;
+      clickTarget.click();
     }
-    return true;
-  }).catch(() => false);
+    return { found: true, checked: checked() };
+  }, { shouldClick: click }).catch(() => ({ found: false, checked: false }));
 
-  if (locatorClicked || domClicked) await wait(500);
-  return locatorClicked || domClicked;
+  let state = await locateAndRead();
+  if (!state.found) return false;
+  if (state.checked) return true;
+  await locateAndRead({ click: true });
+
+  const deadline = Date.now() + 3_000;
+  while (Date.now() < deadline) {
+    await wait(150);
+    state = await locateAndRead();
+    if (state.checked) return true;
+  }
+  return false;
 }
 
 async function clickPhoneLoginInModal(page) {
@@ -1130,23 +1189,32 @@ async function clickCodeBuddyCnOtpRequestButton(loginSurface, page, { timeoutMs 
 
 async function waitForBrowserCredentialsOrApiKey(job, page, onStep) {
   const deadline = Date.now() + (job.options.smsTimeoutMs || DEFAULT_MANUAL_TIMEOUT_MS);
+  const keyName = createCodeBuddyCnApiKeyName();
+  let nextApiKeyAttemptAt = 0;
 
   while (Date.now() < deadline) {
     if (job.cancelRequested) throw new Error("Job cancelled");
 
+    if (await detectCodeBuddyCnRestriction(page)) {
+      throw new Error("CodeBuddy CN account is restricted by upstream security policy (账号访问受限). Proxy wrapping cannot override a server-side account restriction.");
+    }
+
     const extracted = await extractCredentialsFromBrowser(page);
     if (extracted) return extracted;
 
-    try {
-      const apiKey = await createCodeBuddyCnApiKeyViaPage(page);
-      if (apiKey) {
-        return {
-          apiKey,
-          cookiesJson: JSON.stringify(await page.context().cookies().catch(() => [])),
-        };
+    if (Date.now() >= nextApiKeyAttemptAt) {
+      nextApiKeyAttemptAt = Date.now() + 15_000;
+      try {
+        const apiKey = await createCodeBuddyCnApiKeyViaPage(page, { onStep, keyName });
+        if (apiKey) {
+          return {
+            apiKey,
+            cookiesJson: JSON.stringify(await page.context().cookies().catch(() => [])),
+          };
+        }
+      } catch (error) {
+        onStep?.("api_key_not_ready", error.message);
       }
-    } catch {
-      // The account may not be fully logged in yet; keep polling.
     }
 
     onStep?.("awaiting_browser_session", "Waiting for CodeBuddy CN session cookies or API key");
@@ -1205,6 +1273,18 @@ async function runFiveSimRegistrationFlow(job, account, page, onStep, {
 
   let otpRequestAttempts = 1;
   assertJobNotCancelled(job);
+
+  // Ensure the ToS checkbox (我已阅读并同意《服务条款》和《隐私协议》, TDesign
+  // t-checkbox) is checked before requesting OTP — the OTP button stays
+  // disabled until the terms are accepted, which is the most common stall.
+  try {
+    const loginFrameForTerms = await findCodeBuddyCnLoginFrame(page);
+    if (loginFrameForTerms) await acceptCodeBuddyCnLoginTerms(loginFrameForTerms);
+  } catch { /* terms frame not present */ }
+  const termsAccepted = await acceptCodeBuddyCnLoginTerms(loginSurface);
+  if (!termsAccepted) {
+    throw new Error("Could not accept CodeBuddy CN Terms of Service and Privacy Policy");
+  }
   onStep("requesting_otp", `Clicking CodeBuddy CN OTP button for ${order.phone}`);
   const requestResult = await clickOtpButton(loginSurface, page);
   if (!requestResult.clicked) {
@@ -1353,15 +1433,24 @@ function mergeCodeBuddyCnUsageMetadata(providerSpecificData = {}, usage = {}) {
   return merged;
 }
 
-async function defaultBrowserLauncher(browser = DEFAULT_AUTOMATION_BROWSER) {
-  return await createAutomationBrowserLauncher(browser, { headless: true })();
+async function defaultBrowserLauncher(browser = DEFAULT_AUTOMATION_BROWSER, options = {}) {
+  return await createAutomationBrowserLauncher(browser, {
+    headless: options.headless !== false,
+    proxy: options.proxy || null,
+  })();
 }
 
 async function defaultSaveConnection(account) {
   const { createProviderConnection, updateProviderConnection } = await import("../../../models/index.js");
   const { assertProviderEnabled } = await import("@/lib/providerDisabled");
 
+  // A proxy-routed login still honors the local provider safety gate. The
+  // connection is only activated when the upstream gateway confirms usability.
+  const wrappedLogin = account.proxyWrappedLogin === true;
   await assertProviderEnabled("codebuddy-cn");
+  const gatewayUsable = account.providerSpecificData?.gatewayAuthenticated === true
+    && account.providerSpecificData?.gatewayBlocked !== true
+    && account.providerSpecificData?.gatewayProbation !== true;
 
   const providerSpecificData = {
     ...(account.providerSpecificData || {}),
@@ -1371,9 +1460,16 @@ async function defaultSaveConnection(account) {
       idToken: account.jwtToken,
       providerSpecificData: account.providerSpecificData || {},
     }),
-    automation: "cbcn",
+    automation: wrappedLogin ? "cbcn-wrap-login" : "cbcn",
     loginEmailOrPhone: account.contactHint || undefined,
     cookiesJson: account.cookiesJson || undefined,
+    ...(wrappedLogin ? {
+      proxyWrappedLogin: true,
+      gatewayUsable,
+      proxyWrapping: Boolean(account.proxyPoolId || account.proxyUrl),
+      proxyPoolId: account.proxyPoolId || undefined,
+      proxySource: account.proxySource || undefined,
+    } : {}),
   };
 
   const name = account.label || account.email || account.contactHint || "CodeBuddy CN";
@@ -1383,8 +1479,8 @@ async function defaultSaveConnection(account) {
     name,
     email: account.email || undefined,
     providerSpecificData,
-    testStatus: "active",
-    isActive: false,
+    testStatus: gatewayUsable ? "active" : "probation",
+    isActive: wrappedLogin ? gatewayUsable : false,
   };
 
   if (account.apiKey) payload.apiKey = account.apiKey;
@@ -1484,20 +1580,10 @@ async function extractCredentialsFromBrowser(page) {
 }
 
 async function waitForManualCredentials(job, account, page, onStep) {
-  const deadline = Date.now() + (job.options.smsTimeoutMs || DEFAULT_MANUAL_TIMEOUT_MS);
-  while (Date.now() < deadline) {
-    if (job.cancelRequested) {
-      throw new Error("Job cancelled");
-    }
-
-    onStep("awaiting_manual_login", "Waiting for manual login or credential capture");
-    const found = await extractCredentialsFromBrowser(page);
-    if (found) return found;
-
-    await new Promise((resolve) => setTimeout(resolve, job.options.pollIntervalMs || DEFAULT_POLL_INTERVAL_MS));
-  }
-
-  throw new Error("Timed out waiting for CodeBuddy CN credentials from the browser session");
+  // Manual login (incl. wrap-login through a proxy) shares the same
+  // restriction-bypass + API-key-retry loop as the 5sim flow, so a session
+  // that hits the account-restriction gate still produces a saved connection.
+  return await waitForBrowserCredentialsOrApiKey(job, page, onStep);
 }
 
 function cancelPersistedActiveJob(job) {
@@ -1560,7 +1646,27 @@ export class CodeBuddyCnAutomationManager {
     maxRetries = 1,
     smsTimeout = DEFAULT_MANUAL_TIMEOUT_MS / 1000,
     useAllBalance = false,
+    wrapLogin = false,
+    proxyPoolId = null,
+    proxyUrl = null,
   } = {}) {
+    // Login wrapping: resolve the launchable proxy from the selected pool or
+    // custom URL. When wrapLogin is active the saved connection bypasses the
+    // provider-disabled check and the browser egresses through this proxy.
+    let resolvedProxy = null;
+    if (wrapLogin === true) {
+      resolvedProxy = await resolveBulkImportProxy({ proxyPoolId, proxyUrl });
+      if (resolvedProxy.error) {
+        throw Object.assign(new Error(resolvedProxy.error), { error: resolvedProxy.error, status: 400 });
+      }
+      if (!resolvedProxy.proxyUrl) {
+        throw Object.assign(
+          new Error("Login wrapping requires an active proxy pool or a proxy URL"),
+          { error: "Login wrapping requires an active proxy pool or a proxy URL", status: 400 }
+        );
+      }
+    }
+
     const effectiveCount = getEffectiveAutomationCount({
       accounts,
       count,
@@ -1605,6 +1711,15 @@ export class CodeBuddyCnAutomationManager {
         useAllBalance: useAllBalance === true,
         smsTimeoutMs: Math.max(30_000, (Number.parseInt(smsTimeout, 10) || (DEFAULT_MANUAL_TIMEOUT_MS / 1000)) * 1000),
         pollIntervalMs: DEFAULT_POLL_INTERVAL_MS,
+        wrapLogin: wrapLogin === true,
+        proxyWrappedLogin: wrapLogin === true,
+        proxyUrl: resolvedProxy ? resolvedProxy.proxyUrl : null,
+        proxyPoolId: resolvedProxy ? resolvedProxy.proxyPoolId : null,
+        proxySource: resolvedProxy ? resolvedProxy.proxySource : null,
+        proxyMode: resolvedProxy ? resolvedProxy.proxyMode : "none",
+        // Wrap-login opens a visible browser so the user can complete the
+        // phone/SMS login manually through the proxy. Bulk 5sim runs stay headless.
+        headless: wrapLogin !== true,
       },
       accounts: parsed.map((entry) => ({
         ...entry,
@@ -1615,11 +1730,21 @@ export class CodeBuddyCnAutomationManager {
         updatedAt: createdAt,
         connectionId: null,
         runtimeSession: null,
-        providerSpecificData: {},
+        proxyWrappedLogin: wrapLogin === true,
+        proxyPoolId: resolvedProxy ? resolvedProxy.proxyPoolId : null,
+        proxyUrl: resolvedProxy ? resolvedProxy.proxyUrl : null,
+        proxySource: resolvedProxy ? resolvedProxy.proxySource : null,
+        providerSpecificData: wrapLogin === true ? {
+          proxyWrapping: true,
+          proxyPoolId: resolvedProxy ? resolvedProxy.proxyPoolId : undefined,
+          proxySource: resolvedProxy ? resolvedProxy.proxySource : undefined,
+        } : {},
         logs: [
           createLogEntry("queued", entry.hasCredentials
             ? "Queued credential import"
-            : "Queued browser-assisted registration"),
+            : wrapLogin === true
+              ? "Queued login-wrapping registration through proxy"
+              : "Queued browser-assisted registration"),
         ],
       })),
     };
@@ -1845,7 +1970,9 @@ export class CodeBuddyCnAutomationManager {
 
     if (!account.apiKey) {
       this.setAccountStep(account, "creating_codebuddy_cn_api_key", "Trying to create CodeBuddy CN API key from browser session");
-      account.apiKey = await this.createApiKey(page).catch(() => account.apiKey);
+      account.apiKey = await this.createApiKey(page, {
+        keyName: account.apiKeyName || (account.apiKeyName = createCodeBuddyCnApiKeyName()),
+      }).catch(() => account.apiKey);
     }
 
     if (job.cancelRequested) throw new Error("Job cancelled");
@@ -1986,7 +2113,16 @@ export class CodeBuddyCnAutomationManager {
     try {
       const needsBrowser = job.accounts.some((account) => !account.hasCredentials);
       if (needsBrowser) {
-        job.browser = await this.browserLauncher(job.browserChoice || DEFAULT_AUTOMATION_BROWSER);
+        // Pass the resolved proxy (login wrapping) and the headless override
+        // (visible browser for wrap-login manual flows) to the launcher. The
+        // launcher selects Camoufox or Chromium based on job.browserChoice.
+        job.browser = await this.browserLauncher(
+          job.browserChoice || DEFAULT_AUTOMATION_BROWSER,
+          {
+            headless: job.options.headless !== false,
+            proxy: job.options.proxyUrl || null,
+          }
+        );
       }
 
       const workerCount = Math.min(job.concurrency, Math.max(job.accounts.length, 1));
@@ -2081,4 +2217,7 @@ export const __test__ = {
   mergeCodeBuddyCnUsageMetadata,
   runFiveSimRegistrationFlow,
   createCodeBuddyCnWorkerContext,
+  sanitizeJob,
+  normalizePersistedSnapshot,
+  acceptCodeBuddyCnLoginTerms,
 };

@@ -40,4 +40,27 @@ export const FILTERS = {
       })
       .map((m) => ({ id: m.id, name: m.name || m.id }))
       .sort((a, b) => a.id.localeCompare(b.id)),
+
+  // Alibaba DashScope /models — passthrough all chat/reasoning models.
+  // Used by alicode-intl's modelsFetcher for auto-detect. Returns all models
+  // except image-gen (handled by alibaba-image filter), embedding, and ASR/TTS.
+  "alicode-intl": (models) =>
+    (Array.isArray(models) ? models : [])
+      .filter((m) => {
+        const id = (m.id || "").toLowerCase();
+        // Exclude image-gen, embedding, asr, tts, omni-realtime, mt, captioner
+        if (id.startsWith("wan") || id.startsWith("wanx") || id.startsWith("z-image")) return false;
+        if (id.startsWith("qwen-image")) return false;
+        if (id.startsWith("text-embedding")) return false;
+        if (id.includes("asr-") || id.includes("tts-") || id.includes("-tts")) return false;
+        if (id.includes("omni") && id.includes("realtime")) return false;
+        if (id.startsWith("qwen-mt-")) return false;
+        if (id.includes("captioner")) return false;
+        if (id.includes("s2s-")) return false;
+        if (id.includes("livetranslate")) return false;
+        if (id.includes("tingwu")) return false;
+        return true;
+      })
+      .map((m) => ({ id: m.id, name: m.name || m.id }))
+      .sort((a, b) => a.id.localeCompare(b.id)),
 };

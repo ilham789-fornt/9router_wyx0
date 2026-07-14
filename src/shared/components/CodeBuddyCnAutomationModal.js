@@ -5,6 +5,7 @@ import Badge from "./Badge";
 import Button from "./Button";
 import Input from "./Input";
 import Modal from "./Modal";
+import { AUTOMATION_BROWSER_OPTIONS, DEFAULT_AUTOMATION_BROWSER, normalizeAutomationBrowser } from "@/shared/constants/automationBrowsers";
 
 const ACTIVE_JOB_STORAGE_KEY = "codebuddy-cn-automation-active-job";
 const TERMINAL_JOB_STATUSES = new Set(["completed", "cancelled", "failed"]);
@@ -41,6 +42,7 @@ export default function CodeBuddyCnAutomationModal({
   onClose,
   onSuccess,
   disabled = false,
+  mode = "5sim",
 }) {
   const [fiveSimApiKey, setFiveSimApiKey] = useState("");
   const [count, setCount] = useState("1");
@@ -56,16 +58,25 @@ export default function CodeBuddyCnAutomationModal({
   const [checkingQuote, setCheckingQuote] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const notifiedJobRef = useRef(null);
+  // Browser runtime choice (Camoufox default, Chromium alt) + proxy pool for
+  // login wrapping. The 5sim flow sends the chosen browser to /cbcn/start;
+  // the wrap-login flow also sends proxyPoolId to /cbcn/wrap-login.
+  const [browser, setBrowser] = useState(DEFAULT_AUTOMATION_BROWSER);
+  const [proxyPoolId, setProxyPoolId] = useState("");
+  const [proxyPools, setProxyPools] = useState([]);
+  const storageKey = mode === "wrap-login"
+    ? "codebuddy-cn-proxy-login-active-job"
+    : ACTIVE_JOB_STORAGE_KEY;
 
   const rememberJob = useCallback((nextJob) => {
     setJob(nextJob || null);
     if (typeof window === "undefined") return;
     if (nextJob?.jobId && !isTerminalJob(nextJob.status)) {
-      window.localStorage.setItem(ACTIVE_JOB_STORAGE_KEY, nextJob.jobId);
+      window.localStorage.setItem(storageKey, nextJob.jobId);
     } else {
-      window.localStorage.removeItem(ACTIVE_JOB_STORAGE_KEY);
+      window.localStorage.removeItem(storageKey);
     }
-  }, []);
+  }, [storageKey]);
 
   const fetchJob = useCallback(async (jobId) => {
     const response = await fetch(`/api/tools/automation/cbcn/${encodeURIComponent(jobId)}`, {
@@ -89,7 +100,7 @@ export default function CodeBuddyCnAutomationModal({
     const restore = async () => {
       setError("");
       const storedJobId = typeof window !== "undefined"
-        ? window.localStorage.getItem(ACTIVE_JOB_STORAGE_KEY)
+        ? window.localStorage.getItem(storageKey)
         : null;
       try {
         const payload = storedJobId
@@ -105,7 +116,31 @@ export default function CodeBuddyCnAutomationModal({
 
     void restore();
     return () => { cancelled = true; };
-  }, [fetchJob, fetchLatestJob, isOpen, rememberJob]);
+  }, [fetchJob, fetchLatestJob, isOpen, rememberJob, storageKey]);
+
+  // Load active browser-compatible proxy pools for login wrapping.
+  useEffect(() => {
+    if (!isOpen || mode !== "wrap-login") return undefined;
+    let cancelled = false;
+    const loadPools = async () => {
+      try {
+        const res = await fetch("/api/proxy-pools?view=options&isActive=true", { cache: "no-store" });
+        const data = await res.json();
+        const pools = (Array.isArray(data) ? data : data?.proxyPools || data?.pools || [])
+          .filter((pool) => pool && pool.isActive !== false)
+          .filter((pool) => !["vercel", "cloudflare", "deno"].includes(pool.type));
+        if (!cancelled) {
+          setProxyPools(pools);
+          if (!proxyPoolId && pools[0]?.id) setProxyPoolId(pools[0].id);
+        }
+      } catch {
+        if (!cancelled) setProxyPools([]);
+      }
+    };
+    void loadPools();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- proxyPoolId is read only for the initial auto-select; including it would refetch pools on every selection.
+  }, [isOpen, mode]);
 
   useEffect(() => {
     if (!isOpen || !job?.jobId || isTerminalJob(job.status)) return undefined;
@@ -175,38 +210,54 @@ export default function CodeBuddyCnAutomationModal({
   };
 
   const handleStart = async () => {
-    const parsedCount = Number.parseInt(count, 10);
-    const parsedConcurrent = Number.parseInt(concurrent, 10);
-    if (!fiveSimApiKey.trim()) {
-      setError("Enter your 5sim API key.");
-      return;
-    }
-    if (!Number.isFinite(parsedCount) || parsedCount < 1) {
-      setError("Account count must be at least 1.");
-      return;
-    }
-
     setStarting(true);
     setError("");
     setRestoreNotice("");
     try {
-      const response = await fetch("/api/tools/automation/cbcn/start", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          count: parsedCount,
-          concurrent: Number.isFinite(parsedConcurrent) ? parsedConcurrent : 1,
-          fiveSimApiKey: fiveSimApiKey.trim(),
-          fiveSimCountry: country.trim() || DEFAULT_ROUTE.country,
-          fiveSimOperator: operator.trim() || DEFAULT_ROUTE.operator,
-          fiveSimProduct: product.trim() || DEFAULT_ROUTE.product,
-        }),
-      });
-      const payload = await readResponse(response, "Failed to start CodeBuddy CN bulk registration");
+      let response;
+      if (mode === "wrap-login") {
+        if (!proxyPoolId) {
+          setError("Select an active proxy pool to wrap the login.");
+          setStarting(false);
+          return;
+        }
+        response = await fetch("/api/tools/automation/cbcn/wrap-login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ proxyPoolId, browser }),
+        });
+      } else {
+        const parsedCount = Number.parseInt(count, 10);
+        const parsedConcurrent = Number.parseInt(concurrent, 10);
+        if (!fiveSimApiKey.trim()) {
+          setError("Enter your 5sim API key.");
+          setStarting(false);
+          return;
+        }
+        if (!Number.isFinite(parsedCount) || parsedCount < 1) {
+          setError("Account count must be at least 1.");
+          setStarting(false);
+          return;
+        }
+        response = await fetch("/api/tools/automation/cbcn/start", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            count: parsedCount,
+            concurrent: Number.isFinite(parsedConcurrent) ? parsedConcurrent : 1,
+            fiveSimApiKey: fiveSimApiKey.trim(),
+            fiveSimCountry: country.trim() || DEFAULT_ROUTE.country,
+            fiveSimOperator: operator.trim() || DEFAULT_ROUTE.operator,
+            fiveSimProduct: product.trim() || DEFAULT_ROUTE.product,
+            browser,
+          }),
+        });
+      }
+      const payload = await readResponse(response, mode === "wrap-login" ? "Failed to start CodeBuddy CN login wrapping" : "Failed to start CodeBuddy CN bulk registration");
       notifiedJobRef.current = null;
       rememberJob(payload.job);
       setQuote(null);
-      setFiveSimApiKey("");
+      if (mode !== "wrap-login") setFiveSimApiKey("");
     } catch (startError) {
       setError(startError.message);
     } finally {
@@ -254,13 +305,81 @@ export default function CodeBuddyCnAutomationModal({
     <Modal
       isOpen={isOpen}
       onClose={handleClose}
-      title="CodeBuddy CN 5sim Bulk Registration"
+      title={mode === "wrap-login" ? "CodeBuddy CN Proxy Login" : "CodeBuddy CN 5sim Bulk Registration"}
       size="full"
       closeOnOverlay={!starting && !cancelling}
     >
       <div className="flex min-w-0 flex-col gap-5">
-        {!active && (
+        {!active && mode === "wrap-login" && (
           <div className="grid gap-3 rounded-xl border border-border bg-background/40 p-4 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="sm:col-span-2 lg:col-span-3">
+              <label className="mb-1 block text-xs font-semibold text-text-muted">Browser runtime</label>
+              <div className="flex flex-wrap gap-2">
+                {AUTOMATION_BROWSER_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() => setBrowser(opt.id)}
+                    disabled={disabled || starting}
+                    className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors ${
+                      normalizeAutomationBrowser(browser) === opt.id
+                        ? "border-primary/50 bg-primary/10 text-primary"
+                        : "border-border bg-background text-text-main hover:border-primary/30"
+                    }`}
+                  >
+                    {opt.label}{opt.badge ? ` (${opt.badge})` : ""}
+                  </button>
+                ))}
+              </div>
+              <p className="mt-1 text-[11px] text-text-muted">Camoufox matches locale/timezone to the proxy exit IP. Chromium uses an installed Chrome, Edge, or Chromium browser on this host.</p>
+            </div>
+            <div className="sm:col-span-2 lg:col-span-3">
+              <label className="mb-1 block text-xs font-semibold text-text-muted">Proxy pool</label>
+              {proxyPools.length === 0 ? (
+                <p className="text-xs text-amber-600 dark:text-amber-400">No active browser-compatible proxy pools found. Create one under Proxy Pools.</p>
+              ) : (
+                <select
+                  value={proxyPoolId}
+                  onChange={(e) => setProxyPoolId(e.target.value)}
+                  disabled={disabled || starting}
+                  className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-text-main focus:outline-none focus:ring-1 focus:ring-primary"
+                >
+                  {proxyPools.map((pool) => (
+                    <option key={pool.id} value={pool.id}>{pool.name || pool.id} ({pool.type || "http"})</option>
+                  ))}
+                </select>
+              )}
+              <p className="mt-1 text-[11px] text-text-muted">The browser login uses this proxy for egress. Upstream account-policy restrictions are detected and reported; proxying does not override them.</p>
+            </div>
+            <div className="flex flex-wrap items-end gap-2 sm:col-span-2 lg:col-span-3">
+              <Button onClick={handleStart} loading={starting} disabled={disabled || !proxyPoolId} icon="vpn_lock">
+                Start Proxy Login
+              </Button>
+            </div>
+          </div>
+        )}
+        {!active && mode !== "wrap-login" && (
+          <div className="grid gap-3 rounded-xl border border-border bg-background/40 p-4 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="sm:col-span-2 lg:col-span-3">
+              <label className="mb-1 block text-xs font-semibold text-text-muted">Browser runtime</label>
+              <div className="flex flex-wrap gap-2">
+                {AUTOMATION_BROWSER_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() => setBrowser(opt.id)}
+                    disabled={disabled || starting}
+                    className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors ${
+                      normalizeAutomationBrowser(browser) === opt.id
+                        ? "border-primary/50 bg-primary/10 text-primary"
+                        : "border-border bg-background text-text-main hover:border-primary/30"
+                    }`}
+                  >
+                    {opt.label}{opt.badge ? ` (${opt.badge})` : ""}
+                  </button>
+                ))}
+              </div>
+            </div>
             <Input
               label="5sim API Key"
               type="password"
@@ -335,7 +454,7 @@ export default function CodeBuddyCnAutomationModal({
             <div className="flex flex-col gap-3 rounded-xl border border-border p-4 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <div className="flex flex-wrap items-center gap-2">
-                  <h3 className="font-semibold text-text-main">Bulk job</h3>
+                  <h3 className="font-semibold text-text-main">{mode === "wrap-login" ? "Proxy login job" : "Bulk job"}</h3>
                   <Badge variant={statusVariant(job.status)}>{job.status}</Badge>
                 </div>
                 <p className="mt-1 break-all text-xs text-text-muted">{job.jobId}</p>
@@ -370,6 +489,8 @@ export default function CodeBuddyCnAutomationModal({
                   <span>Live Browser Preview</span>
                   <span>{job.preview.label || "CodeBuddy CN"} · {job.preview.step || job.preview.status}</span>
                 </div>
+                {/* Data-URL screenshots are ephemeral job previews; Next Image cannot optimize them. */}
+                {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img src={job.preview.imageData} alt="CodeBuddy CN browser preview" className="max-h-[420px] w-full object-contain" />
               </div>
             )}

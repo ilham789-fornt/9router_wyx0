@@ -54,6 +54,11 @@ export async function GET(request) {
     }
 
     const proxyPools = await getProxyPools(filter);
+    if (searchParams.get("view") === "options") {
+      return NextResponse.json({
+        proxyPools: proxyPools.map(({ id, name, type, isActive, testStatus }) => ({ id, name, type, isActive, testStatus })),
+      });
+    }
 
     if (!includeUsage) {
       return NextResponse.json({ proxyPools });
