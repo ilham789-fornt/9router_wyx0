@@ -22,6 +22,7 @@ import {
   handleCodeBuddyStartedAuthorization,
   isProviderPage,
 } from "./automation/googleOAuth.js";
+import { resolveBulkImportProxy } from "./bulkImportProxyResolver.js";
 
 const CODEBUDDY_PROVIDER_ID = "codebuddy";
 const CODEBUDDY_LABEL = "CodeBuddy";
@@ -72,7 +73,7 @@ function normalizeCodeBuddyAuthUrl(rawUrl, state) {
 
 // ── Connection & Token Helpers ─────────────────────────────────────────────────
 
-async function defaultSaveCodeBuddyConnection({ tokens, email }) {
+async function defaultSaveCodeBuddyConnection({ tokens, email, wrapLogin = false, proxyPoolId, proxySource }) {
   const { createProviderConnection } = await import("../../../models/index.js");
   const { assertProviderEnabled } = await import("@/lib/providerDisabled");
   await assertProviderEnabled(CODEBUDDY_PROVIDER_ID);
@@ -80,7 +81,13 @@ async function defaultSaveCodeBuddyConnection({ tokens, email }) {
   const providerSpecificData = {
     ...(tokens.providerSpecificData || {}),
     loginEmail: email,
-    automation: "gsuite-bulk",
+    automation: wrapLogin ? "codebuddy-wrap-login" : "gsuite-bulk",
+    ...(wrapLogin ? {
+      proxyWrappedLogin: true,
+      proxyWrapping: Boolean(proxyPoolId),
+      proxyPoolId: proxyPoolId || undefined,
+      proxySource: proxySource || undefined,
+    } : {}),
   };
 
   if (tokens.webCookie) {
@@ -91,7 +98,7 @@ async function defaultSaveCodeBuddyConnection({ tokens, email }) {
   const connectionPayload = {
     provider: CODEBUDDY_PROVIDER_ID,
     authType: hasApiKey ? "apikey" : "oauth",
-    name: email || undefined,
+    name: wrapLogin ? "CodeBuddy OAuth via Proxy" : (email || undefined),
     email,
     providerSpecificData,
     isActive: false,
@@ -289,6 +296,8 @@ function createCodeBuddyPollPromise({
   pollToken,
   onStep,
   signal,
+  shouldCancel,
+  onPending,
   timeoutMs = CODEBUDDY_POLL_TIMEOUT_MS,
   pollIntervalMs = CODEBUDDY_POLL_INTERVAL_MS,
   maxTransientErrors = CODEBUDDY_MAX_TRANSIENT_POLL_ERRORS,
@@ -296,10 +305,11 @@ function createCodeBuddyPollPromise({
   return (async () => {
     const startedAt = Date.now();
     let lastStepAt = 0;
+    let pollAttempt = 0;
     let transientErrors = 0;
 
     while (Date.now() - startedAt < timeoutMs) {
-      if (signal?.aborted) {
+      if (signal?.aborted || shouldCancel?.()) {
         throw new Error("CodeBuddy OAuth polling cancelled");
       }
 
@@ -308,8 +318,12 @@ function createCodeBuddyPollPromise({
         lastStepAt = Date.now();
       }
 
+      pollAttempt += 1;
       const result = await pollToken(CODEBUDDY_PROVIDER_ID, deviceCode);
-      if (result.success) return { tokens: result.tokens };
+      if (result.success) {
+        onStep?.("codebuddy_token_received", `CodeBuddy OAuth token received after ${pollAttempt} poll attempt${pollAttempt === 1 ? "" : "s"}`);
+        return { tokens: result.tokens };
+      }
 
       if (!result.pending && result.error !== "authorization_pending" && result.error !== "slow_down") {
         if (result.error === "request_failed" && transientErrors < maxTransientErrors) {
@@ -321,11 +335,44 @@ function createCodeBuddyPollPromise({
         throw new Error(result.errorDescription || result.error || "CodeBuddy OAuth polling failed");
       }
 
+      onStep?.("codebuddy_token_pending", `CodeBuddy OAuth authorization is still pending (poll ${pollAttempt})`);
+      await onPending?.(result, pollAttempt);
+
       await wait(pollIntervalMs, signal);
     }
 
     throw new Error("Timed out waiting for CodeBuddy OAuth token");
   })();
+}
+
+async function completeCodeBuddyOAuthState(page, deviceCode, onStep) {
+  const currentUrl = typeof page?.url === "function" ? String(page.url() || "") : "";
+  let parsed = null;
+  try {
+    parsed = currentUrl ? new URL(currentUrl) : null;
+  } catch {
+    parsed = null;
+  }
+
+  const isGlobalSessionPage = parsed?.hostname === "www.codebuddy.ai"
+    && !/^\/(?:login|auth)(?:\/|$)/.test(parsed.pathname);
+  if (!isGlobalSessionPage) return { completed: false, reason: "web_session_not_ready" };
+
+  onStep?.("codebuddy_web_session_detected", "Authenticated CodeBuddy Global browser session detected");
+
+  const startedUrl = new URL("https://www.codebuddy.ai/started");
+  startedUrl.searchParams.set("platform", "CLI");
+  startedUrl.searchParams.set("state", deviceCode);
+  onStep?.("completing_codebuddy_oauth", "Completing the CodeBuddy Global OAuth browser callback");
+
+  if (!/^\/started\/?$/.test(parsed.pathname) || parsed.searchParams.get("state") !== deviceCode) {
+    await page.goto(startedUrl.toString(), { waitUntil: "domcontentloaded", timeout: 15_000 });
+  }
+  const completed = await handleCodeBuddyStartedAuthorization(page, onStep);
+  if (!completed) {
+    onStep?.("codebuddy_oauth_callback_pending", "The /started callback was not accepted yet; token polling will continue");
+  }
+  return { completed, reason: completed ? "callback_attempted" : "callback_not_accepted" };
 }
 
 // ── Registration Completion ────────────────────────────────────────────────────
@@ -378,6 +425,7 @@ export class CodeBuddyBulkImportManager extends BaseBulkImportManager {
     pollToken = defaultPollForToken,
     saveConnection = defaultSaveCodeBuddyConnection,
     createApiKeyTokens = defaultCreateCodeBuddyApiKeyTokens,
+    proxyResolver = resolveBulkImportProxy,
     pollIntervalMs = CODEBUDDY_POLL_INTERVAL_MS,
   } = {}) {
     super({
@@ -392,13 +440,35 @@ export class CodeBuddyBulkImportManager extends BaseBulkImportManager {
     this.pollToken = pollToken;
     this.saveConnection = saveConnection;
     this.createApiKeyTokens = createApiKeyTokens;
+    this.proxyResolver = proxyResolver;
     this.pollIntervalMs = pollIntervalMs;
   }
 
-  startJob({ accounts, parsedAccounts, concurrency, browser } = {}) {
+  async startJob({
+    accounts,
+    parsedAccounts,
+    concurrency,
+    browser,
+    wrapLogin = false,
+    proxyPoolId = null,
+    proxyUrl = null,
+  } = {}) {
     let normalizedAccounts = parsedAccounts;
 
-    if (!Array.isArray(normalizedAccounts)) {
+    let resolvedProxy = null;
+    if (wrapLogin === true) {
+      resolvedProxy = await this.proxyResolver({ proxyPoolId, proxyUrl });
+      if (resolvedProxy.error) {
+        throw Object.assign(new Error(resolvedProxy.error), { error: resolvedProxy.error, status: 400 });
+      }
+      if (!resolvedProxy.proxyUrl) {
+        const error = "Login wrapping requires an active proxy pool";
+        throw Object.assign(new Error(error), { error, status: 400 });
+      }
+      normalizedAccounts = [{ line: 1, email: "CodeBuddy OAuth", password: undefined }];
+    }
+
+    if (!wrapLogin && !Array.isArray(normalizedAccounts)) {
       const { parsed, invalidLines } = parseCodeBuddyBulkAccounts(accounts);
       if (invalidLines.length > 0) {
         const error = "Invalid account format. Use one account per line: gmail@example.com|password";
@@ -407,11 +477,25 @@ export class CodeBuddyBulkImportManager extends BaseBulkImportManager {
       normalizedAccounts = parsed;
     }
 
-    return super.startJob({
+    const sanitizedJob = super.startJob({
       parsedAccounts: normalizedAccounts,
-      concurrency,
+      concurrency: wrapLogin ? 1 : concurrency,
       browser,
+      browserLaunchOptions: wrapLogin ? {
+        headless: false,
+        proxy: resolvedProxy.proxyUrl,
+      } : null,
     });
+    const job = this.jobs.get(sanitizedJob.jobId);
+    if (job) {
+      job.wrapLogin = wrapLogin === true;
+      job.proxyPoolId = resolvedProxy?.proxyPoolId || null;
+      job.proxySource = resolvedProxy?.proxySource || null;
+      job.accounts.forEach((account) => {
+        account.proxyWrappedLogin = wrapLogin === true;
+      });
+    }
+    return this.getJob(sanitizedJob.jobId);
   }
 
   async runManualFollowup(job, account, workerId, context, successPromise) {
@@ -514,16 +598,83 @@ export class CodeBuddyBulkImportManager extends BaseBulkImportManager {
       }
 
       pollController = new AbortController();
+      let startedCallbackCompleted = false;
+      let waitingForWebSessionReported = false;
       const successPromise = createCodeBuddyPollPromise({
         deviceCode: deviceData.device_code,
         pollToken: this.pollToken,
         signal: pollController.signal,
+        shouldCancel: () => job.cancelRequested,
+        onPending: job.wrapLogin ? async (_result, pollAttempt) => {
+          if (startedCallbackCompleted || job.cancelRequested) return;
+          const completion = await completeCodeBuddyOAuthState(
+            page,
+            deviceData.device_code,
+            (step, message) => {
+              this.setAccountStep(account, step, message);
+              void this.persistJobSnapshot(job, { forcePreview: false });
+            }
+          );
+          if (completion.reason === "web_session_not_ready" && !waitingForWebSessionReported) {
+            waitingForWebSessionReported = true;
+            this.setAccountStep(
+              account,
+              "waiting_for_codebuddy_web_session",
+              "OAuth is pending; waiting for the browser login to create a CodeBuddy Global web session"
+            );
+          }
+          startedCallbackCompleted = completion.completed;
+          if (startedCallbackCompleted) {
+            this.setAccountStep(
+              account,
+              "polling_after_codebuddy_callback",
+              `CodeBuddy OAuth callback attempted after poll ${pollAttempt}; validating through the official token endpoint`
+            );
+          }
+        } : undefined,
         pollIntervalMs: this.pollIntervalMs,
         onStep: (step, message) => {
           this.setAccountStep(account, step, message);
           void this.persistJobSnapshot(job, { forcePreview: false });
         },
       });
+
+      if (job.wrapLogin) {
+        this.setAccountStep(account, "opening_codebuddy_oauth", "Opening CodeBuddy OAuth login through the selected proxy");
+        await page.goto(authUrl, { waitUntil: "domcontentloaded", timeout: 30_000 });
+        const result = await successPromise;
+        if (job.cancelRequested) throw new Error("Job cancelled");
+
+        this.setAccountStep(account, "saving_connection", "Saving CodeBuddy OAuth connection from proxy-routed login");
+        await this.persistJobSnapshot(job, { forcePreview: true });
+        const tokensWithCookie = await attachCodeBuddyWebCookie(context, result.tokens || {});
+        if (job.cancelRequested) throw new Error("Job cancelled");
+        const { connection } = await this.saveConnection({
+          tokens: {
+            ...tokensWithCookie,
+            providerSpecificData: {
+              ...(tokensWithCookie.providerSpecificData || {}),
+              authKind: "access_token",
+              proxyWrappedLogin: true,
+            },
+            isActive: false,
+          },
+          email: undefined,
+          wrapLogin: true,
+          proxyPoolId: job.proxyPoolId,
+          proxySource: job.proxySource,
+        });
+        if (job.cancelRequested) throw new Error("Job cancelled");
+        this.finalizeAccount(account, "success", {
+          connectionId: connection.id,
+          step: "connection_saved",
+          message: "CodeBuddy OAuth connection saved successfully",
+        });
+        account.runtimeSession = null;
+        await context.close().catch(() => null);
+        await this.persistJobSnapshot(job, { forcePreview: true });
+        return;
+      }
 
       const automationResult = await this.googleAutomation({
         page,

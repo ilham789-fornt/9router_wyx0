@@ -19,6 +19,7 @@
 - Keep provider-detail bulk connection actions scoped to the selected connection IDs, and require confirmation before destructive bulk actions.
 - Provider management APIs allow multiple saved OpenAI- and Anthropic-compatible connections per compatible node; custom embedding nodes remain single-connection unless that contract is intentionally changed.
 - Present Camoufox as the single automation runtime in dashboard flows; do not expose browser-runtime selection controls.
+- OAuth-via-proxy dashboard flows select active browser-compatible proxy pools by ID and delegate proxy resolution, browser launch, token polling, and credential persistence to provider-local services.
 - Keep `/api/system/capacity` limited to coarse server CPU/RAM capacity data for local worker recommendations; do not expose sensitive host details.
 - Keep CodeBuddy CN out of the generic OAuth Providers section: its provider detail deep-links to the dedicated Automation tab, where OAuth and 5sim bulk registration remain separate modes.
 - Keep CodeBuddy CN 5sim quote/check routes under the dedicated automation API surface and return sanitized balance, stock, affordability, and proxy-route metadata only.

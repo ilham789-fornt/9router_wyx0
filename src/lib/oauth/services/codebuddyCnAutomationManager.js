@@ -4,7 +4,7 @@ import path from "node:path";
 import { DATA_DIR } from "../../dataDir.js";
 import { createAutomationBrowserLauncher } from "./automationBrowserLauncher.js";
 import { DEFAULT_AUTOMATION_BROWSER, normalizeAutomationBrowser } from "@/shared/constants/automationBrowsers";
-import { createFreshContext } from "./automation/baseBulkImportManager.js";
+import { createFreshContext, writeJsonFile } from "./automation/baseBulkImportManager.js";
 import { getUsageForProvider } from "open-sse/services/usage.js";
 import {
   buildCodeBuddyCnProviderMetadata,
@@ -197,10 +197,7 @@ function readJson(filePath) {
 }
 
 function writeJson(filePath, payload) {
-  ensureDir(path.dirname(filePath));
-  const tempPath = `${filePath}.${process.pid}.tmp`;
-  fs.writeFileSync(tempPath, JSON.stringify(payload, null, 2), "utf8");
-  fs.renameSync(tempPath, filePath);
+  writeJsonFile(filePath, payload);
 }
 
 function getJobFile(jobId, dir = CODEBUDDY_CN_AUTOMATION_DIR) {

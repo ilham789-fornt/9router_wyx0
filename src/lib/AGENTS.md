@@ -16,6 +16,7 @@
 - Preserve stored data compatibility and migration order; never discard user data as an incidental fix.
 - Keep secrets out of logs, responses, fixtures, and committed files.
 - Make writes resilient to partial or concurrent operations using existing repository and transaction patterns.
+- File-backed automation snapshots use unique temporary files and Windows-safe replacement; never delete the last valid snapshot before its replacement is durable.
 - Preserve provider-connection deduplication by default; use explicit repository options when a caller intentionally supports multiple same-name API-key connections.
 - Keep environment and data-directory handling centralized rather than hard-coding platform paths.
 - Changes to storage shape, credential lifecycle, or externally visible side effects require tests and documentation updates.
@@ -27,6 +28,7 @@
 - Keep browser automation, session scraping, and bulk account import flows inside provider-local OAuth services rather than route handlers or dashboard components.
 - Provider bulk import managers should clear provider-specific interstitials, modals, and login gates before deciding a browser session is stuck or needs manual assist.
 - Provider automation must use isolated Camoufox sessions; bulk workers run headless and close only the affected worker context after callback capture while retaining redirect-header and navigation-event fallbacks.
+- Provider OAuth wrapping may use one visible Camoufox session through a resolved browser-compatible proxy pool; never persist or return the resolved proxy URL or credentials in job state.
 - CodeBuddy CN automation follows the recovered enow lifecycle: create the API key, probe credits and gateway state, run best-effort activation, then save credentials with activation and probation metadata; activation uncertainty must not discard otherwise valid credentials.
 - CodeBuddy CN 5sim registration must confirm the SMS login surface before buying a number, request OTPs through the visible CodeBuddy UI, and retry after cooldowns without using direct SMS endpoints.
 - Keep 5sim client behavior centralized in `oauth/services/fiveSimClient.js`, including token validation, price/stock quote caching, OTP polling, and proxy-dispatched fetches.

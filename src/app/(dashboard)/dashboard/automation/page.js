@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Badge, Button, BulkAccountAutomationModal, Card, CardSkeleton, CodeBuddyCnAutomationModal, KiroOAuthWrapper, OAuthModal } from "@/shared/components";
+import { Badge, Button, BulkAccountAutomationModal, Card, CardSkeleton, CodeBuddyCnAutomationModal, CodeBuddyProxyOAuthModal, KiroOAuthWrapper, OAuthModal } from "@/shared/components";
 import ProviderIcon from "@/shared/components/ProviderIcon";
 import { AI_PROVIDERS } from "@/shared/constants/providers";
 import { isProviderDisabledFromConnections } from "@/shared/utils/providerConnectionStats";
@@ -226,10 +226,25 @@ function CodeBuddyAutomationPanel({ providerInfo, onRefresh, disabled = false })
   const [isOpen, setIsOpen] = useState(false);
   const [isBulkOpen, setIsBulkOpen] = useState(false);
   const [isBulkTokenOpen, setIsBulkTokenOpen] = useState(false);
+  const [isWrapOpen, setIsWrapOpen] = useState(false);
 
   return (
     <>
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+        <button
+          type="button"
+          onClick={() => setIsWrapOpen(true)}
+          disabled={disabled}
+          className={getAutomationCardClasses(disabled)}
+        >
+          <span className="flex items-center gap-2 text-sm font-semibold text-text-main">
+            <span className="material-symbols-outlined text-[20px] text-primary">vpn_lock</span>
+            OAuth via Proxy
+          </span>
+          <span className="text-xs leading-relaxed text-text-muted">
+            Open the official CodeBuddy Global OAuth login through an active proxy pool and save access/refresh tokens.
+          </span>
+        </button>
         <button
           type="button"
           onClick={() => setIsBulkOpen(true)}
@@ -278,6 +293,12 @@ function CodeBuddyAutomationPanel({ providerInfo, onRefresh, disabled = false })
         disabled={disabled}
         onClose={() => setIsBulkTokenOpen(false)}
         onSuccess={onRefresh}
+      />
+      <CodeBuddyProxyOAuthModal
+        isOpen={isWrapOpen && !disabled}
+        disabled={disabled}
+        onSuccess={onRefresh}
+        onClose={() => setIsWrapOpen(false)}
       />
       <BulkAccountAutomationModal
         isOpen={isBulkOpen && !disabled}
@@ -456,7 +477,7 @@ const AUTOMATION_PROVIDERS = [
     id: "codebuddy",
     label: "CodeBuddy",
     description: "Bulk GSuite automation and browser OAuth polling login.",
-    supportedModes: ["bulk-account", "device-oauth"],
+    supportedModes: ["bulk-account", "device-oauth", "wrap-login"],
     component: CodeBuddyAutomationPanel,
   },
   {

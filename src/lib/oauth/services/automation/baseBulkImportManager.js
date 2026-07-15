@@ -122,9 +122,21 @@ export function readJsonFile(filePath) {
 
 export function writeJsonFile(filePath, payload) {
   ensureDir(path.dirname(filePath));
-  const tempFile = `${filePath}.${process.pid}.tmp`;
+  const tempFile = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
   fs.writeFileSync(tempFile, JSON.stringify(payload, null, 2), "utf8");
-  fs.renameSync(tempFile, filePath);
+  try {
+    fs.renameSync(tempFile, filePath);
+  } catch (error) {
+    if (process.platform !== "win32" || !["EPERM", "EACCES", "EBUSY"].includes(error?.code)) {
+      throw error;
+    }
+
+    // Windows can reject atomic replacement while another process, an indexer,
+    // or antivirus briefly holds the destination. copyFileSync still replaces
+    // the contents without deleting the last valid snapshot first.
+    fs.copyFileSync(tempFile, filePath);
+    fs.unlinkSync(tempFile);
+  }
 }
 
 export function getJobFile(jobId, dir) {
@@ -329,8 +341,11 @@ async function revealBrowserWindow(page) {
 
 // ── Default Browser Launcher ───────────────────────────────────────────────────
 
-async function defaultBrowserLauncher(browser = DEFAULT_AUTOMATION_BROWSER) {
-  return await createAutomationBrowserLauncher(browser, { headless: true })();
+async function defaultBrowserLauncher(browser = DEFAULT_AUTOMATION_BROWSER, options = {}) {
+  return await createAutomationBrowserLauncher(browser, {
+    headless: options.headless !== false,
+    proxy: options.proxy || null,
+  })();
 }
 
 // ── Base Class ─────────────────────────────────────────────────────────────────
@@ -365,7 +380,7 @@ export class BaseBulkImportManager {
 
   // ── Job Lifecycle ────────────────────────────────────────────────────────
 
-  startJob({ parsedAccounts, concurrency, browser }) {
+  startJob({ parsedAccounts, concurrency, browser, browserLaunchOptions = null }) {
     if (!parsedAccounts.length) {
       throw Object.assign(new Error("At least one account entry is required"), { error: "At least one account entry is required" });
     }
@@ -378,6 +393,7 @@ export class BaseBulkImportManager {
       status: "running",
       concurrency: clampConcurrency(concurrency, { def: this.defaultConcurrency }),
       browserChoice,
+      browserLaunchOptions,
       createdAt,
       startedAt: createdAt,
       finishedAt: null,
@@ -605,7 +621,10 @@ export class BaseBulkImportManager {
       let accountBrowser = job.browser;
       try {
         if (this.browserPerAccount) {
-          accountBrowser = await this.browserLauncher(job.browserChoice || DEFAULT_AUTOMATION_BROWSER);
+          accountBrowser = await this.browserLauncher(
+            job.browserChoice || DEFAULT_AUTOMATION_BROWSER,
+            job.browserLaunchOptions || {}
+          );
           job.activeBrowsers.add(accountBrowser);
         }
         await this.processAccount(job, account, workerId, accountBrowser);
@@ -634,7 +653,10 @@ export class BaseBulkImportManager {
 
     try {
       if (!this.browserPerAccount) {
-        job.browser = await this.browserLauncher(job.browserChoice || DEFAULT_AUTOMATION_BROWSER);
+        job.browser = await this.browserLauncher(
+          job.browserChoice || DEFAULT_AUTOMATION_BROWSER,
+          job.browserLaunchOptions || {}
+        );
       }
       job.accounts.forEach((account) => {
         if (account.status === "queued" && (account.logs || []).length === 1) {

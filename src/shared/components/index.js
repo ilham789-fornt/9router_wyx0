@@ -35,6 +35,7 @@ export { default as IFlowCookieModal } from "./IFlowCookieModal";
 export { default as GeminiWebCookieModal } from "./GeminiWebCookieModal";
 export { default as CodeBuddyQuotaCookieModal } from "./CodeBuddyQuotaCookieModal";
 export { default as CodeBuddyCnAutomationModal } from "./CodeBuddyCnAutomationModal";
+export { default as CodeBuddyProxyOAuthModal } from "./CodeBuddyProxyOAuthModal";
 export { default as GitLabAuthModal } from "./GitLabAuthModal";
 export { default as EditConnectionModal } from "./EditConnectionModal";
 export { default as AddCustomEmbeddingModal } from "./AddCustomEmbeddingModal";
