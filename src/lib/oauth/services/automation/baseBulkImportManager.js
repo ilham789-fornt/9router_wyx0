@@ -380,7 +380,7 @@ export class BaseBulkImportManager {
 
   // ── Job Lifecycle ────────────────────────────────────────────────────────
 
-  startJob({ parsedAccounts, concurrency, browser, browserLaunchOptions = null }) {
+  startJob({ parsedAccounts, concurrency, browser, browserLaunchOptions = null, prelaunchedBrowsers = null }) {
     if (!parsedAccounts.length) {
       throw Object.assign(new Error("At least one account entry is required"), { error: "At least one account entry is required" });
     }
@@ -401,6 +401,7 @@ export class BaseBulkImportManager {
       cancelRequested: false,
       browser: null,
       activeBrowsers: new Set(),
+      prelaunchedBrowsers: prelaunchedBrowsers || new Map(),
       nextIndex: 0,
       manualFollowups: new Set(),
       persistPromise: Promise.resolve(),
@@ -441,7 +442,9 @@ export class BaseBulkImportManager {
     if (!job) return normalizePersistedJobSnapshot(readJsonFile(getJobFile(jobId, this.storageDir)));
     const preview = await this.capturePreview(job);
     job.lastPreview = preview || job.lastPreview || null;
-    await this.persistJobSnapshot(job, { forcePreview: false });
+    // Status polling is a read path. A transient Windows file lock must not turn
+    // a valid job response into HTTP 500 merely because preview persistence failed.
+    await this.persistJobSnapshot(job, { forcePreview: false }).catch(() => null);
     return sanitizeJob(job, { preview: job.lastPreview || null });
   }
 
@@ -621,10 +624,21 @@ export class BaseBulkImportManager {
       let accountBrowser = job.browser;
       try {
         if (this.browserPerAccount) {
-          accountBrowser = await this.browserLauncher(
-            job.browserChoice || DEFAULT_AUTOMATION_BROWSER,
-            job.browserLaunchOptions || {}
-          );
+          accountBrowser = job.prelaunchedBrowsers?.get(account.line) || null;
+          job.prelaunchedBrowsers?.delete(account.line);
+          if (!accountBrowser) {
+            const launchOptions = typeof job.browserLaunchOptions === "function"
+              ? await job.browserLaunchOptions({ job, account, workerId })
+              : (job.browserLaunchOptions || {});
+            accountBrowser = await this.browserLauncher(
+              job.browserChoice || DEFAULT_AUTOMATION_BROWSER,
+              launchOptions
+            );
+          }
+          if (job.cancelRequested) {
+            await accountBrowser.close().catch(() => null);
+            return;
+          }
           job.activeBrowsers.add(accountBrowser);
         }
         await this.processAccount(job, account, workerId, accountBrowser);

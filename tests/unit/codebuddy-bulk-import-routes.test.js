@@ -78,6 +78,25 @@ describe("CodeBuddy bulk import routes", () => {
     expect(managerMock.startJob).not.toHaveBeenCalled();
   });
 
+  it("forwards only the selected proxy pool to bulk jobs", async () => {
+    managerMock.startJob.mockResolvedValue({ jobId: "job-proxy", status: "running" });
+    const { POST } = await import("../../src/app/api/oauth/codebuddy/bulk-import/route.js");
+    const response = await POST({
+      json: async () => ({
+        accounts: ["user@example.com|secret"],
+        concurrency: 2,
+        proxyPoolId: " pool-1 ",
+        proxyUrl: "http://ignored:8080",
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(managerMock.startJob).toHaveBeenCalledWith(expect.objectContaining({
+      proxyPoolId: "pool-1",
+    }));
+    expect(managerMock.startJob.mock.calls[0][0]).not.toHaveProperty("proxyUrl");
+  });
+
   it("returns JSON when the job is missing", async () => {
     managerMock.cancelJob.mockReturnValue(null);
 

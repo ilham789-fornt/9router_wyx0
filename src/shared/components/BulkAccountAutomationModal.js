@@ -176,6 +176,7 @@ export default function BulkAccountAutomationModal({
   maxConcurrency = 8,
   accountFormat = "gmail|password",
   introText,
+  enableProxyPool = false,
 }) {
   const storageKey = `${provider}-bulk-import-active-job`;
   const notify = useNotificationStore();
@@ -186,6 +187,8 @@ export default function BulkAccountAutomationModal({
   const [activeJob, setActiveJob] = useState(null);
   const [error, setError] = useState(null);
   const [importing, setImporting] = useState(false);
+  const [proxyPools, setProxyPools] = useState([]);
+  const [proxyPoolId, setProxyPoolId] = useState("");
   const [jobRestoreNotice, setJobRestoreNotice] = useState(null);
   const browserChoice = DEFAULT_AUTOMATION_BROWSER;
   const runningJob = activeJob && ACTIVE_JOB_STATUSES.has(activeJob.status);
@@ -227,6 +230,24 @@ export default function BulkAccountAutomationModal({
     void loadCapacity();
     return () => { cancelled = true; };
   }, [defaultConcurrency, fallbackRecommendation, maxConcurrency]);
+
+  useEffect(() => {
+    if (!isOpen || !enableProxyPool) return undefined;
+    let cancelled = false;
+    fetch("/api/proxy-pools?view=options&isActive=true", { cache: "no-store" })
+      .then((response) => response.json())
+      .then((data) => {
+        if (cancelled) return;
+        const pools = (Array.isArray(data) ? data : data?.proxyPools || data?.pools || [])
+          .filter((pool) => pool?.isActive !== false && !["vercel", "cloudflare", "deno"].includes(pool?.type));
+        setProxyPools(pools);
+        setProxyPoolId((current) => current || pools[0]?.id || "");
+      })
+      .catch(() => {
+        if (!cancelled) setProxyPools([]);
+      });
+    return () => { cancelled = true; };
+  }, [enableProxyPool, isOpen]);
 
   const resetState = useCallback(() => {
     setBulkText("");
@@ -327,6 +348,7 @@ export default function BulkAccountAutomationModal({
           accounts: lines,
           concurrency: Number.parseInt(concurrency, 10) || defaultConcurrency,
           browser: browserChoice,
+          ...(enableProxyPool ? { proxyPoolId } : {}),
         }),
       });
       const data = await readBulkApiResponse(res, "Bulk account import failed");
@@ -455,6 +477,26 @@ export default function BulkAccountAutomationModal({
               </div>
               <p className="mt-1 text-xs text-text-muted">Runs isolated browser workers in the background.</p>
             </div>
+            {enableProxyPool && (
+              <div className="rounded-lg border border-border bg-background p-3">
+                <label htmlFor={`${provider}-bulk-proxy-pool`} className="mb-1 block text-sm font-medium">Unique worker proxy pool</label>
+                {proxyPools.length > 0 ? (
+                  <select
+                    id={`${provider}-bulk-proxy-pool`}
+                    value={proxyPoolId}
+                    onChange={(event) => setProxyPoolId(event.target.value)}
+                    className="w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+                  >
+                    {proxyPools.map((pool) => (
+                      <option key={pool.id} value={pool.id}>{pool.name || pool.id} ({pool.type || "http"})</option>
+                    ))}
+                  </select>
+                ) : (
+                  <p className="text-xs text-amber-600 dark:text-amber-400">No active browser-compatible proxy pool found.</p>
+                )}
+                <p className="mt-1 text-xs text-text-muted">Each account launches in a separate Camoufox process with a different proxy. The pool must contain at least one unique proxy per account.</p>
+              </div>
+            )}
           </>
         )}
 
@@ -641,7 +683,7 @@ export default function BulkAccountAutomationModal({
 
         <div className="flex gap-2">
           {!activeJob && (
-            <Button onClick={handleStartBulk} fullWidth disabled={importing || !bulkText.trim()}>
+            <Button onClick={handleStartBulk} fullWidth disabled={importing || !bulkText.trim() || (enableProxyPool && !proxyPoolId)}>
               {importing ? "Starting..." : "Start Bulk Login"}
             </Button>
           )}
@@ -675,4 +717,5 @@ BulkAccountAutomationModal.propTypes = {
   maxConcurrency: PropTypes.number,
   accountFormat: PropTypes.string,
   introText: PropTypes.string,
+  enableProxyPool: PropTypes.bool,
 };

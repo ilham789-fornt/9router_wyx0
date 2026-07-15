@@ -17,6 +17,7 @@ import {
 import { runCodeBuddyCnLifecycle } from "./codebuddyCnLifecycle.js";
 import { detectCodeBuddyCnRestriction } from "./codebuddyCnBypass.js";
 import { resolveBulkImportProxy } from "./bulkImportProxyResolver.js";
+import { launchWithWorkingLoginProxy } from "./automation/proxyLoginPicker.js";
 
 const CODEBUDDY_CN_PROVIDER_ID = "codebuddy-cn";
 const CODEBUDDY_CN_OAUTH_PLATFORM = "CLI";
@@ -1706,6 +1707,7 @@ export class CodeBuddyCnAutomationManager {
     requestDeviceCodeFn = defaultRequestDeviceCode,
     pollForTokenFn = defaultPollForToken,
     usageLoader = getUsageForProvider,
+    proxyBrowserPicker = launchWithWorkingLoginProxy,
     storageName = "codebuddy-cn-automation",
   } = {}) {
     this.browserLauncher = browserLauncher;
@@ -1715,6 +1717,7 @@ export class CodeBuddyCnAutomationManager {
     this.requestDeviceCode = requestDeviceCodeFn;
     this.pollForToken = pollForTokenFn;
     this.usageLoader = usageLoader;
+    this.proxyBrowserPicker = proxyBrowserPicker;
     this.storageDir = path.join(DATA_DIR, storageName);
     this.metaFile = path.join(this.storageDir, "meta.json");
     this.jobs = new Map();
@@ -1752,6 +1755,16 @@ export class CodeBuddyCnAutomationManager {
           { error: "Login wrapping requires an active proxy pool or a proxy URL", status: 400 }
         );
       }
+      const pickedProxy = await this.proxyBrowserPicker({
+        proxyUrls: resolvedProxy.proxyUrls || [resolvedProxy.proxyUrl],
+        testUrl: "https://www.codebuddy.cn/login",
+        browser,
+        browserLauncher: this.browserLauncher,
+      });
+      if (!pickedProxy.proxyUrl) {
+        throw Object.assign(new Error(pickedProxy.error), { error: pickedProxy.error, status: 400 });
+      }
+      resolvedProxy = { ...resolvedProxy, proxyUrl: pickedProxy.proxyUrl, proxyChecked: pickedProxy.checked, browser: pickedProxy.browser };
     }
 
     const effectiveCount = getEffectiveAutomationCount({
@@ -1804,6 +1817,7 @@ export class CodeBuddyCnAutomationManager {
         proxyPoolId: resolvedProxy ? resolvedProxy.proxyPoolId : null,
         proxySource: resolvedProxy ? resolvedProxy.proxySource : null,
         proxyMode: resolvedProxy ? resolvedProxy.proxyMode : "none",
+        proxyChecked: resolvedProxy ? resolvedProxy.proxyChecked : null,
         // Wrap-login opens a visible browser so the user can complete the
         // phone/SMS login manually through the proxy. Bulk 5sim runs stay headless.
         headless: wrapLogin !== true,
@@ -1835,6 +1849,7 @@ export class CodeBuddyCnAutomationManager {
         ],
       })),
     };
+    if (resolvedProxy?.browser) job.browser = resolvedProxy.browser;
 
     this.jobs.set(jobId, job);
     this.latestJobId = jobId;
@@ -2222,7 +2237,7 @@ export class CodeBuddyCnAutomationManager {
 
     try {
       const needsBrowser = job.accounts.some((account) => !account.hasCredentials);
-      if (needsBrowser) {
+      if (needsBrowser && !job.browser) {
         // Pass the resolved proxy (login wrapping) and the headless override
         // (visible browser for wrap-login manual flows) to the launcher. The
         // launcher selects Camoufox or Chromium based on job.browserChoice.

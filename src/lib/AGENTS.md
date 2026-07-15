@@ -29,6 +29,10 @@
 - Provider bulk import managers should clear provider-specific interstitials, modals, and login gates before deciding a browser session is stuck or needs manual assist.
 - Provider automation must use isolated Camoufox sessions; bulk workers run headless and close only the affected worker context after callback capture while retaining redirect-header and navigation-event fallbacks.
 - Provider OAuth wrapping may use one visible Camoufox session through a resolved browser-compatible proxy pool; never persist or return the resolved proxy URL or credentials in job state.
+- CodeBuddy CN and Global OAuth wrapping preflight pool proxies against the provider HTTPS login endpoint in pool order and launch only with the first reachable proxy; failed transport details and credentials stay server-private.
+- Their Auto pool mode aggregates all active browser-compatible pools and retries the visible browser launch with subsequent preflight-valid proxies until one opens or candidates are exhausted.
+- Visible Camoufox OAuth sessions use a compact laptop-sized window through Camoufox's native fingerprint-aware `window` option; headless worker sizing remains runtime-managed.
+- CodeBuddy Global bulk GSuite jobs resolve one proxy pool at job start and require a unique proxy plus separate Camoufox process for every account; runtime proxy URLs never enter persisted or sanitized job state.
 - CodeBuddy CN automation follows the recovered enow lifecycle: create the API key, probe credits and gateway state, run best-effort activation, then save credentials with activation and probation metadata; activation uncertainty must not discard otherwise valid credentials.
 - CodeBuddy CN 5sim registration must confirm the SMS login surface before buying a number, request OTPs through the visible CodeBuddy UI, and retry after cooldowns without using direct SMS endpoints.
 - Keep 5sim client behavior centralized in `oauth/services/fiveSimClient.js`, including token validation, price/stock quote caching, OTP polling, and proxy-dispatched fetches.

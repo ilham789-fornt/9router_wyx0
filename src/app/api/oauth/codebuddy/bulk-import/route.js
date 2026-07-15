@@ -33,6 +33,7 @@ export async function POST(request) {
       accounts,
       concurrency: body?.concurrency,
       browser: body?.browser,
+      proxyPoolId: typeof body?.proxyPoolId === "string" ? body.proxyPoolId.trim() : null,
     });
 
     return NextResponse.json({

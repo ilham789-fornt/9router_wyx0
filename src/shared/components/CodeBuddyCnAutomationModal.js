@@ -14,6 +14,7 @@ const DEFAULT_ROUTE = {
   operator: "virtual54",
   product: "codebuddy",
 };
+const AUTO_PROXY_POOL_ID = "__auto__";
 
 function isTerminalJob(status) {
   return TERMINAL_JOB_STATUSES.has(status);
@@ -131,7 +132,7 @@ export default function CodeBuddyCnAutomationModal({
           .filter((pool) => !["vercel", "cloudflare", "deno"].includes(pool.type));
         if (!cancelled) {
           setProxyPools(pools);
-          if (!proxyPoolId && pools[0]?.id) setProxyPoolId(pools[0].id);
+          if (!proxyPoolId) setProxyPoolId(AUTO_PROXY_POOL_ID);
         }
       } catch {
         if (!cancelled) setProxyPools([]);
@@ -344,6 +345,7 @@ export default function CodeBuddyCnAutomationModal({
                   disabled={disabled || starting}
                   className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-text-main focus:outline-none focus:ring-1 focus:ring-primary"
                 >
+                  <option value={AUTO_PROXY_POOL_ID}>Auto pool — test all active pools</option>
                   {proxyPools.map((pool) => (
                     <option key={pool.id} value={pool.id}>{pool.name || pool.id} ({pool.type || "http"})</option>
                   ))}
@@ -352,6 +354,7 @@ export default function CodeBuddyCnAutomationModal({
               <p className="mt-1 text-[11px] text-text-muted">The OAuth authorization page uses this proxy for browser egress. Access and refresh tokens are obtained from the official OAuth token endpoint; no API key is created.</p>
             </div>
             <div className="flex flex-wrap items-end gap-2 sm:col-span-2 lg:col-span-3">
+              <p className="mt-1 text-[11px] text-text-muted">Auto pool tests all active pool proxies and retries with the next candidate until the browser opens.</p>
               <Button onClick={handleStart} loading={starting} disabled={disabled || !proxyPoolId} icon="vpn_lock">
                 Start OAuth via Proxy
               </Button>

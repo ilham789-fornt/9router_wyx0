@@ -23,6 +23,7 @@ import {
   isProviderPage,
 } from "./automation/googleOAuth.js";
 import { resolveBulkImportProxy } from "./bulkImportProxyResolver.js";
+import { launchWithWorkingLoginProxy } from "./automation/proxyLoginPicker.js";
 
 const CODEBUDDY_PROVIDER_ID = "codebuddy";
 const CODEBUDDY_LABEL = "CodeBuddy";
@@ -426,12 +427,14 @@ export class CodeBuddyBulkImportManager extends BaseBulkImportManager {
     saveConnection = defaultSaveCodeBuddyConnection,
     createApiKeyTokens = defaultCreateCodeBuddyApiKeyTokens,
     proxyResolver = resolveBulkImportProxy,
+    proxyBrowserPicker = launchWithWorkingLoginProxy,
     pollIntervalMs = CODEBUDDY_POLL_INTERVAL_MS,
   } = {}) {
     super({
       storageName: "codebuddy-bulk-import",
       providerLabel: CODEBUDDY_LABEL,
       browserLauncher,
+      browserPerAccount: true,
       defaultConcurrency: CODEBUDDY_BULK_IMPORT_DEFAULT_CONCURRENCY,
     });
 
@@ -441,6 +444,7 @@ export class CodeBuddyBulkImportManager extends BaseBulkImportManager {
     this.saveConnection = saveConnection;
     this.createApiKeyTokens = createApiKeyTokens;
     this.proxyResolver = proxyResolver;
+    this.proxyBrowserPicker = proxyBrowserPicker;
     this.pollIntervalMs = pollIntervalMs;
   }
 
@@ -465,6 +469,16 @@ export class CodeBuddyBulkImportManager extends BaseBulkImportManager {
         const error = "Login wrapping requires an active proxy pool";
         throw Object.assign(new Error(error), { error, status: 400 });
       }
+      const pickedProxy = await this.proxyBrowserPicker({
+        proxyUrls: resolvedProxy.proxyUrls || [resolvedProxy.proxyUrl],
+        testUrl: "https://www.codebuddy.ai/login",
+        browser,
+        browserLauncher: this.browserLauncher,
+      });
+      if (!pickedProxy.proxyUrl) {
+        throw Object.assign(new Error(pickedProxy.error), { error: pickedProxy.error, status: 400 });
+      }
+      resolvedProxy = { ...resolvedProxy, proxyUrl: pickedProxy.proxyUrl, proxyChecked: pickedProxy.checked, browser: pickedProxy.browser };
       normalizedAccounts = [{ line: 1, email: "CodeBuddy OAuth", password: undefined }];
     }
 
@@ -477,20 +491,46 @@ export class CodeBuddyBulkImportManager extends BaseBulkImportManager {
       normalizedAccounts = parsed;
     }
 
+    if (!wrapLogin) {
+      if (!proxyPoolId) {
+        const error = "CodeBuddy bulk login requires an active proxy pool";
+        throw Object.assign(new Error(error), { error, status: 400 });
+      }
+      resolvedProxy = await this.proxyResolver({ proxyPoolId });
+      if (resolvedProxy.error) {
+        throw Object.assign(new Error(resolvedProxy.error), { error: resolvedProxy.error, status: 400 });
+      }
+      if ((resolvedProxy.proxyUrls || []).length < normalizedAccounts.length) {
+        const error = `Proxy pool needs at least ${normalizedAccounts.length} unique proxies for ${normalizedAccounts.length} accounts`;
+        throw Object.assign(new Error(error), { error, status: 400 });
+      }
+    }
+
+    const proxyByLine = new Map((normalizedAccounts || []).map((account, index) => [
+      account.line,
+      wrapLogin
+        ? resolvedProxy?.proxyUrl || null
+        : resolvedProxy?.proxyUrls?.[index] || null,
+    ]));
+
     const sanitizedJob = super.startJob({
       parsedAccounts: normalizedAccounts,
       concurrency: wrapLogin ? 1 : concurrency,
       browser,
-      browserLaunchOptions: wrapLogin ? {
-        headless: false,
-        proxy: resolvedProxy.proxyUrl,
-      } : null,
+      browserLaunchOptions: ({ account }) => ({
+        headless: wrapLogin ? false : true,
+        proxy: proxyByLine.get(account.line),
+      }),
+      prelaunchedBrowsers: wrapLogin && resolvedProxy.browser
+        ? new Map([[normalizedAccounts[0].line, resolvedProxy.browser]])
+        : null,
     });
     const job = this.jobs.get(sanitizedJob.jobId);
     if (job) {
       job.wrapLogin = wrapLogin === true;
       job.proxyPoolId = resolvedProxy?.proxyPoolId || null;
       job.proxySource = resolvedProxy?.proxySource || null;
+      job.proxyChecked = resolvedProxy?.proxyChecked || null;
       job.accounts.forEach((account) => {
         account.proxyWrappedLogin = wrapLogin === true;
       });
@@ -498,7 +538,7 @@ export class CodeBuddyBulkImportManager extends BaseBulkImportManager {
     return this.getJob(sanitizedJob.jobId);
   }
 
-  async runManualFollowup(job, account, workerId, context, successPromise) {
+  async runManualFollowup(job, account, workerId, context, successPromise, accountBrowser) {
     const followupPromise = (async () => {
       try {
         const result = await successPromise;
@@ -568,6 +608,8 @@ export class CodeBuddyBulkImportManager extends BaseBulkImportManager {
         account.manualSession = null;
         account.runtimeSession = null;
         await context.close().catch(() => null);
+        await accountBrowser?.close?.().catch(() => null);
+        job.activeBrowsers?.delete(accountBrowser);
         job.manualFollowups.delete(followupPromise);
         await this.persistJobSnapshot(job, { forcePreview: true });
       }
@@ -576,13 +618,13 @@ export class CodeBuddyBulkImportManager extends BaseBulkImportManager {
     job.manualFollowups.add(followupPromise);
   }
 
-  async processAccount(job, account, workerId) {
-    if (job.cancelRequested || !job.browser) {
+  async processAccount(job, account, workerId, accountBrowser) {
+    if (job.cancelRequested || !accountBrowser) {
       this.finalizeAccount(account, "cancelled", { error: "Job cancelled" });
       return;
     }
 
-    const { context, page } = await createFreshContext(job.browser);
+    const { context, page } = await createFreshContext(accountBrowser);
     account.runtimeSession = { context, page };
     let pollController = null;
 
@@ -745,7 +787,7 @@ export class CodeBuddyBulkImportManager extends BaseBulkImportManager {
           message: automationResult.error,
         });
         await this.persistJobSnapshot(job, { forcePreview: true });
-        await this.runManualFollowup(job, account, workerId, context, successPromise);
+        await this.runManualFollowup(job, account, workerId, context, successPromise, accountBrowser);
         return;
       }
 

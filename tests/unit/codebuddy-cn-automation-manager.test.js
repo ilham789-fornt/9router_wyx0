@@ -583,6 +583,50 @@ describe("CodeBuddy CN automation manager helpers", () => {
     expect(saveConnection).toHaveBeenCalledOnce();
   });
 
+  it("picks the first CN login-reachable proxy before starting wrap login", async () => {
+    const browserLauncher = vi.fn(async () => ({
+      newContext: vi.fn(async () => ({
+        newPage: vi.fn(async () => ({
+          goto: vi.fn(async () => null),
+          url: vi.fn(() => "https://www.codebuddy.cn/login"),
+          evaluate: vi.fn(async () => false),
+          context: vi.fn(() => ({ cookies: vi.fn(async () => []) })),
+        })),
+        close: vi.fn(async () => null),
+      })),
+      close: vi.fn(async () => null),
+    }));
+    const proxyBrowserPicker = vi.fn(async ({ proxyUrls, testUrl, browserLauncher: launch }) => {
+      expect(proxyUrls).toEqual(["http://bad:8080", "http://good:8080"]);
+      expect(testUrl).toBe("https://www.codebuddy.cn/login");
+      return {
+        browser: await launch("camofox", { headless: false, proxy: "http://good:8080" }),
+        proxyUrl: "http://good:8080",
+        checked: 2,
+        error: null,
+      };
+    });
+    const manager = new CodeBuddyCnAutomationManager({
+      browserLauncher,
+      proxyBrowserPicker,
+      storageName: "codebuddy-cn-proxy-picker-test",
+    });
+
+    await manager.startJob({
+      accounts: [],
+      count: 1,
+      concurrent: 1,
+      wrapLogin: true,
+      proxyUrl: "http://bad:8080 http://good:8080",
+    });
+
+    expect(proxyBrowserPicker).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(browserLauncher).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ proxy: "http://good:8080" })
+    ));
+  });
+
   it("does not save a connection when cancellation arrives during lifecycle checks", async () => {
     const job = { cancelRequested: false, options: {} };
     const saveConnection = vi.fn();

@@ -44,6 +44,17 @@ describe("automation browser runtime", () => {
     });
   });
 
+  it("uses a compact laptop-sized window for visible Camoufox sessions", async () => {
+    const { createAutomationBrowserLauncher } = await import("../../src/lib/oauth/services/automationBrowserLauncher.js");
+
+    await createAutomationBrowserLauncher("camofox", { headless: false })();
+
+    expect(Camoufox).toHaveBeenLastCalledWith(expect.objectContaining({
+      headless: false,
+      window: [1100, 700],
+    }));
+  });
+
   it("explains package and browser asset incompatibility", async () => {
     Camoufox.mockRejectedValueOnce(new Error("Unknown property audio:seed in config"));
     const { createAutomationBrowserLauncher } = await import("../../src/lib/oauth/services/automationBrowserLauncher.js");

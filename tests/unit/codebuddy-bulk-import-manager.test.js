@@ -58,6 +58,12 @@ describe("CodeBuddyBulkImportManager", () => {
   it("runs bulk GSuite accounts through CodeBuddy polling and saves connections", async () => {
     const saved = [];
     const manager = new CodeBuddyBulkImportManager({
+      proxyResolver: async () => ({
+        proxyUrls: ["http://proxy-1:8080", "http://proxy-2:8080"],
+        proxyPoolId: "pool-bulk",
+        proxySource: "pool",
+        error: null,
+      }),
       browserLauncher: async () => createFakeBrowser(),
       requestDeviceCodeFn: async () => ({
         device_code: "state-1",
@@ -97,6 +103,7 @@ describe("CodeBuddyBulkImportManager", () => {
         "user2@example.com|pw2",
       ],
       concurrency: 2,
+      proxyPoolId: "pool-bulk",
     });
 
     const finishedJob = await waitFor(() => {
@@ -120,6 +127,12 @@ describe("CodeBuddyBulkImportManager", () => {
   it("retries transient CodeBuddy token request failures before saving", async () => {
     let attempts = 0;
     const manager = new CodeBuddyBulkImportManager({
+      proxyResolver: async () => ({
+        proxyUrls: ["http://proxy-1:8080"],
+        proxyPoolId: "pool-bulk",
+        proxySource: "pool",
+        error: null,
+      }),
       browserLauncher: async () => createFakeBrowser(),
       requestDeviceCodeFn: async () => ({
         device_code: "state-1",
@@ -160,6 +173,7 @@ describe("CodeBuddyBulkImportManager", () => {
     const startedJob = await manager.startJob({
       accounts: ["user1@example.com|pw1"],
       concurrency: 1,
+      proxyPoolId: "pool-bulk",
     });
 
     const finishedJob = await waitFor(() => {
@@ -171,6 +185,67 @@ describe("CodeBuddyBulkImportManager", () => {
     expect(finishedJob.summary.success).toBe(1);
   });
 
+  it("launches a separate browser with a unique pool proxy for every bulk account", async () => {
+    const launches = [];
+    const browsers = [];
+    const manager = new CodeBuddyBulkImportManager({
+      proxyResolver: async () => ({
+        proxyUrls: ["http://user:secret@proxy-1:8080", "socks5://proxy-2:1080"],
+        proxyPoolId: "pool-unique",
+        proxySource: "pool",
+        error: null,
+      }),
+      browserLauncher: async (_browser, options) => {
+        launches.push(options);
+        const instance = createFakeBrowser();
+        browsers.push(instance);
+        return instance;
+      },
+      requestDeviceCodeFn: async () => ({ device_code: "state", verification_uri: "https://www.codebuddy.ai/login" }),
+      pollToken: async () => ({ success: true, tokens: { accessToken: "access" } }),
+      googleAutomation: async ({ successPromise }) => ({ status: "success", ...(await successPromise) }),
+      createApiKeyTokens: async ({ tokens }) => ({ ...tokens, apiKey: "key" }),
+      saveConnection: async ({ email }) => ({ connection: { id: `conn-${email}` } }),
+    });
+
+    const started = await manager.startJob({
+      accounts: ["one@example.com|pw", "two@example.com|pw"],
+      concurrency: 2,
+      proxyPoolId: "pool-unique",
+    });
+    const finished = await waitFor(() => {
+      const current = manager.getJob(started.jobId);
+      return current?.status === "completed" ? current : null;
+    });
+
+    expect(finished.summary.success).toBe(2);
+    expect(browsers).toHaveLength(2);
+    expect(new Set(browsers).size).toBe(2);
+    expect(launches).toEqual(expect.arrayContaining([
+      { headless: true, proxy: "http://user:secret@proxy-1:8080" },
+      { headless: true, proxy: "socks5://proxy-2:1080" },
+    ]));
+    expect(JSON.stringify(finished)).not.toContain("proxy-1");
+    expect(JSON.stringify(finished)).not.toContain("secret");
+  });
+
+  it("rejects bulk jobs when the pool has fewer unique proxies than accounts", async () => {
+    const manager = new CodeBuddyBulkImportManager({
+      proxyResolver: async () => ({
+        proxyUrls: ["http://proxy-1:8080"],
+        proxyPoolId: "pool-small",
+        proxySource: "pool",
+        error: null,
+      }),
+    });
+
+    await expect(manager.startJob({
+      accounts: ["one@example.com|pw", "two@example.com|pw"],
+      concurrency: 2,
+      proxyPoolId: "pool-small",
+    })).rejects.toMatchObject({ status: 400 });
+  });
+
   it("wraps Global OAuth through a visible proxy without Google automation or API-key creation", async () => {
     const openedUrls = [];
     const launchCalls = [];
@@ -180,11 +255,17 @@ describe("CodeBuddyBulkImportManager", () => {
     const manager = new CodeBuddyBulkImportManager({
       proxyResolver: async ({ proxyPoolId }) => ({
         proxyUrl: "socks5://user:pass@127.0.0.1:1080",
+        proxyUrls: ["socks5://bad:1080", "socks5://user:pass@127.0.0.1:1080"],
         proxyPoolId,
         proxySource: "pool",
         proxyMode: "single",
         error: null,
       }),
+      proxyBrowserPicker: async ({ proxyUrls, testUrl, browserLauncher }) => {
+        expect(proxyUrls).toHaveLength(2);
+        expect(testUrl).toBe("https://www.codebuddy.ai/login");
+        return { browser: await browserLauncher("camofox", { headless: false, proxy: proxyUrls[1] }), proxyUrl: proxyUrls[1], checked: 2, error: null };
+      },
       browserLauncher: async (browser, options) => {
         launchCalls.push({ browser, options });
         return createFakeBrowser({
@@ -256,9 +337,16 @@ describe("CodeBuddyBulkImportManager", () => {
     const manager = new CodeBuddyBulkImportManager({
       proxyResolver: async () => ({
         proxyUrl: "http://127.0.0.1:8080",
+        proxyUrls: ["http://127.0.0.1:8080"],
         proxyPoolId: "pool-started",
         proxySource: "pool",
         proxyMode: "single",
+        error: null,
+      }),
+      proxyBrowserPicker: async ({ proxyUrls, browserLauncher }) => ({
+        browser: await browserLauncher("camofox", { headless: false, proxy: proxyUrls[0] }),
+        proxyUrl: proxyUrls[0],
+        checked: 1,
         error: null,
       }),
       browserLauncher: async () => createFakeBrowser({

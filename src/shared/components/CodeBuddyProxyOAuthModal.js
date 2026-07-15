@@ -8,6 +8,7 @@ import { AUTOMATION_BROWSER_OPTIONS, DEFAULT_AUTOMATION_BROWSER, normalizeAutoma
 
 const STORAGE_KEY = "codebuddy-proxy-login-active-job";
 const TERMINAL_STATUSES = new Set(["completed", "cancelled", "failed"]);
+const AUTO_PROXY_POOL_ID = "__auto__";
 
 async function readResponse(response, fallback) {
   const data = await response.json().catch(() => null);
@@ -64,7 +65,7 @@ export default function CodeBuddyProxyOAuthModal({ isOpen, onClose, onSuccess, d
       const pools = (Array.isArray(poolData) ? poolData : poolData?.proxyPools || poolData?.pools || [])
         .filter((pool) => pool?.isActive !== false && !["vercel", "cloudflare", "deno"].includes(pool?.type));
       setProxyPools(pools);
-      setProxyPoolId((current) => current || pools[0]?.id || "");
+      setProxyPoolId((current) => current || AUTO_PROXY_POOL_ID);
       if (jobData?.job) rememberJob(jobData.job);
     }).catch((loadError) => {
       if (!cancelled) setError(loadError.message);
@@ -92,6 +93,9 @@ export default function CodeBuddyProxyOAuthModal({ isOpen, onClose, onSuccess, d
     if (!job?.jobId || !TERMINAL_STATUSES.has(job.status) || notifiedRef.current === job.jobId) return;
     notifiedRef.current = job.jobId;
     if (job.summary?.success > 0) onSuccess?.();
+    if (job.error || job.accounts?.[0]?.error) {
+      setError(job.error || job.accounts[0].error);
+    }
   }, [job, onSuccess]);
 
   const start = async () => {
@@ -157,10 +161,11 @@ export default function CodeBuddyProxyOAuthModal({ isOpen, onClose, onSuccess, d
             <label htmlFor="codebuddy-proxy-pool" className="mb-1 block text-xs font-semibold text-text-muted">Proxy pool</label>
             {proxyPools.length ? (
               <select id="codebuddy-proxy-pool" value={proxyPoolId} onChange={(event) => setProxyPoolId(event.target.value)} disabled={disabled || starting} className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-text-main focus:outline-none focus:ring-1 focus:ring-primary">
+                <option value={AUTO_PROXY_POOL_ID}>Auto pool — test all active pools</option>
                 {proxyPools.map((pool) => <option key={pool.id} value={pool.id}>{pool.name || pool.id} ({pool.type || "http"})</option>)}
               </select>
             ) : <p className="text-xs text-amber-600 dark:text-amber-400">No active browser-compatible proxy pools found.</p>}
-            <p className="mt-2 text-xs text-text-muted">A visible browser session opens the official CodeBuddy Global OAuth page through this proxy. The flow saves OAuth tokens and does not create an API key.</p>
+            <p className="mt-2 text-xs text-text-muted">Auto pool tests active proxies in order and retries browser launch with the next candidate until the login browser opens. OAuth tokens still come from the official endpoint.</p>
             <Button onClick={start} loading={starting} disabled={disabled || !proxyPoolId} icon="vpn_lock" className="mt-3">Start OAuth via Proxy</Button>
           </div>
         )}

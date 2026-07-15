@@ -1,4 +1,4 @@
-import { getProxyPoolById } from "../../../models/index.js";
+import { getProxyPoolById, getProxyPools } from "../../../models/index.js";
 import { getSettings } from "../../db/repos/settingsRepo.js";
 
 const RELAY_POOL_TYPES = new Set(["vercel", "cloudflare", "deno"]);
@@ -8,6 +8,7 @@ const VALID_PROXY_PROTOCOLS = new Set([
   "socks4:",
   "socks5:",
 ]);
+export const AUTO_PROXY_POOL_ID = "__auto__";
 
 export function splitBulkImportProxyUrls(value) {
   return String(value || "")
@@ -57,6 +58,17 @@ function buildResolvedProxy(proxyUrls, source) {
  * When error is non-null the caller should respond with 400.
  */
 export async function resolveBulkImportProxy({ proxyPoolId, proxyUrl } = {}) {
+  if (proxyPoolId === AUTO_PROXY_POOL_ID) {
+    const pools = await getProxyPools({ isActive: true });
+    const proxyUrls = pools
+      .filter((pool) => !RELAY_POOL_TYPES.has(pool.type))
+      .flatMap((pool) => splitBulkImportProxyUrls(pool.proxyUrl));
+    const validationError = validateProxyUrls(proxyUrls);
+    if (validationError) {
+      return { ...buildResolvedProxy([], { proxyPoolId, proxySource: "auto-pools" }), error: validationError };
+    }
+    return buildResolvedProxy(proxyUrls, { proxyPoolId, proxySource: "auto-pools" });
+  }
   if (proxyPoolId) {
     const pool = await getProxyPoolById(proxyPoolId);
     if (!pool) {

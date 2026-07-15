@@ -305,6 +305,7 @@ function CodeBuddyAutomationPanel({ providerInfo, onRefresh, disabled = false })
         provider="codebuddy"
         title="CodeBuddy Bulk GSuite Login"
         serviceName="CodeBuddy"
+        enableProxyPool
         onSuccess={onRefresh}
         onClose={() => setIsBulkOpen(false)}
       />

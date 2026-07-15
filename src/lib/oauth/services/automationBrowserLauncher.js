@@ -5,6 +5,8 @@ import {
   normalizeAutomationBrowser,
 } from "../../../shared/constants/automationBrowsers.js";
 
+const COMPACT_VISIBLE_WINDOW = [1100, 700];
+
 function getHostFingerprintOs() {
   if (process.platform === "win32") return "windows";
   if (process.platform === "darwin") return "macos";
@@ -44,6 +46,7 @@ async function launchCamoufox({ headless = true, proxy } = {}) {
     block_webrtc: true,
     humanize: false,
   };
+  if (!headless) config.window = COMPACT_VISIBLE_WINDOW;
   if (proxy) {
     // Camoufox accepts a string OR a Playwright proxy object. Pass the string
     // directly so socks5/http schemes resolve natively. geoip: true makes
