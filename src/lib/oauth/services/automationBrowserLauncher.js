@@ -52,7 +52,17 @@ async function launchCamoufox({ headless = true, proxy } = {}) {
     config.proxy = typeof proxy === "string" ? proxy : parseProxyStringToObject(proxy);
     config.geoip = true;
   }
-  return await Camoufox(config);
+  try {
+    return await Camoufox(config);
+  } catch (error) {
+    if (/Unknown property .* in config/i.test(String(error?.message || ""))) {
+      throw new Error("Camoufox package and browser assets are incompatible. Run npm install, then npm exec -- camoufox-js fetch.");
+    }
+    if (/Failed to get a public proxy IP address/i.test(String(error?.message || ""))) {
+      throw new Error("The selected proxy cannot establish the HTTPS connection required by browser OAuth. Verify that it supports HTTP CONNECT to port 443, its credentials are valid, and its allowlist permits www.codebuddy.ai.");
+    }
+    throw error;
+  }
 }
 
 function findInstalledChromiumExecutable() {

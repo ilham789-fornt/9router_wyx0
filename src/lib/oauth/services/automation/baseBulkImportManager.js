@@ -122,9 +122,17 @@ export function readJsonFile(filePath) {
 
 export function writeJsonFile(filePath, payload) {
   ensureDir(path.dirname(filePath));
-  const tempFile = `${filePath}.${process.pid}.tmp`;
+  const tempFile = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
   fs.writeFileSync(tempFile, JSON.stringify(payload, null, 2), "utf8");
-  fs.renameSync(tempFile, filePath);
+  try {
+    fs.renameSync(tempFile, filePath);
+  } catch (error) {
+    if (process.platform !== "win32" || !["EPERM", "EACCES", "EBUSY"].includes(error?.code)) {
+      throw error;
+    }
+    fs.copyFileSync(tempFile, filePath);
+    fs.unlinkSync(tempFile);
+  }
 }
 
 export function getJobFile(jobId, dir) {
