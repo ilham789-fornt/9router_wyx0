@@ -509,6 +509,80 @@ describe("CodeBuddy CN automation manager helpers", () => {
     expect(result.connection.id).toBe("cbcn-connection");
   });
 
+  it("opens the official OAuth URL through the browser and returns OAuth tokens", async () => {
+    const goto = vi.fn(async () => undefined);
+    const page = {
+      goto,
+      url: vi.fn(() => "https://www.codebuddy.cn/home/"),
+      evaluate: vi.fn(async () => false),
+      context: vi.fn(() => ({ cookies: vi.fn(async () => []) })),
+    };
+    const requestDeviceCode = vi.fn(async () => ({
+      verification_uri: "https://www.codebuddy.cn/auth/realms/copilot/device",
+      device_code: "oauth-state",
+    }));
+    const pollForToken = vi.fn(async () => ({
+      success: true,
+      tokens: {
+        accessToken: "oauth-access",
+        refreshToken: "oauth-refresh",
+        providerSpecificData: { domain: "www.codebuddy.cn" },
+      },
+    }));
+
+    const result = await __test__.waitForCodeBuddyCnOAuthTokens(
+      { cancelRequested: false, options: { smsTimeoutMs: 30_000, pollIntervalMs: 1 } },
+      page,
+      { requestDeviceCode, pollForToken }
+    );
+
+    expect(requestDeviceCode).toHaveBeenCalledWith("codebuddy-cn");
+    expect(pollForToken).toHaveBeenCalledWith("codebuddy-cn", "oauth-state");
+    expect(goto).toHaveBeenNthCalledWith(1, "https://www.codebuddy.cn/auth/realms/copilot/device", expect.any(Object));
+    expect(result).toMatchObject({
+      accessToken: "oauth-access",
+      refreshToken: "oauth-refresh",
+      providerSpecificData: { domain: "www.codebuddy.cn" },
+    });
+  });
+
+  it("does not create an API key for a proxy-routed OAuth login", async () => {
+    const createApiKey = vi.fn();
+    const saveConnection = vi.fn(async (account) => {
+      expect(account.apiKey).toBeFalsy();
+      expect(account.accessToken).toBe("oauth-access");
+      expect(account.refreshToken).toBe("oauth-refresh");
+      return { connection: { id: "oauth-connection" } };
+    });
+    const manager = new CodeBuddyCnAutomationManager({
+      createApiKey,
+      lifecycleRunner: vi.fn(async ({ beforeActivation }) => {
+        await beforeActivation();
+        return {
+          activation: { status: "already_active", method: "status" },
+          gateway: { authenticated: true, blocked: false, probation: false, message: "" },
+        };
+      }),
+      usageLoader: vi.fn(async () => null),
+      saveConnection,
+      storageName: "codebuddy-cn-proxy-oauth-test",
+    });
+
+    await manager.finishAuthenticatedAccount({
+      job: { cancelRequested: false, options: { wrapLogin: true } },
+      account: { proxyWrappedLogin: true, providerSpecificData: {}, logs: [] },
+      page: { locator: vi.fn(() => ({ count: vi.fn(async () => 0) })) },
+      extracted: {
+        accessToken: "oauth-access",
+        refreshToken: "oauth-refresh",
+        providerSpecificData: { authKind: "access_token" },
+      },
+    });
+
+    expect(createApiKey).not.toHaveBeenCalled();
+    expect(saveConnection).toHaveBeenCalledOnce();
+  });
+
   it("does not save a connection when cancellation arrives during lifecycle checks", async () => {
     const job = { cancelRequested: false, options: {} };
     const saveConnection = vi.fn();

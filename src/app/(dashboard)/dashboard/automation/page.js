@@ -345,10 +345,10 @@ function CodeBuddyCnAutomationPanel({ providerInfo, onRefresh, disabled = false 
         >
           <span className="flex items-center gap-2 text-sm font-semibold text-text-main">
             <span className="material-symbols-outlined text-[20px] text-primary">vpn_lock</span>
-            Proxy Login
+            OAuth via Proxy
           </span>
           <span className="text-xs leading-relaxed text-text-muted">
-            Open the CodeBuddy CN login through an active proxy pool. Upstream account restrictions are reported, not hidden.
+            Open the official CodeBuddy CN OAuth login through an active proxy pool and save access/refresh tokens without creating an API key.
           </span>
         </button>
       </div>
@@ -462,7 +462,7 @@ const AUTOMATION_PROVIDERS = [
   {
     id: "codebuddy-cn",
     label: "CodeBuddy CN",
-    description: "Device OAuth, 5sim-assisted bulk registration, and proxy-routed browser login.",
+    description: "Device OAuth, 5sim-assisted bulk registration, and proxy-routed OAuth login.",
     supportedModes: ["oauth", "5sim-bulk", "wrap-login"],
     component: CodeBuddyCnAutomationPanel,
   },

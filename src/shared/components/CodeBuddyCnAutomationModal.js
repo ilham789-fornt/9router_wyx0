@@ -305,7 +305,7 @@ export default function CodeBuddyCnAutomationModal({
     <Modal
       isOpen={isOpen}
       onClose={handleClose}
-      title={mode === "wrap-login" ? "CodeBuddy CN Proxy Login" : "CodeBuddy CN 5sim Bulk Registration"}
+      title={mode === "wrap-login" ? "CodeBuddy CN OAuth via Proxy" : "CodeBuddy CN 5sim Bulk Registration"}
       size="full"
       closeOnOverlay={!starting && !cancelling}
     >
@@ -349,11 +349,11 @@ export default function CodeBuddyCnAutomationModal({
                   ))}
                 </select>
               )}
-              <p className="mt-1 text-[11px] text-text-muted">The browser login uses this proxy for egress. Upstream account-policy restrictions are detected and reported; proxying does not override them.</p>
+              <p className="mt-1 text-[11px] text-text-muted">The OAuth authorization page uses this proxy for browser egress. Access and refresh tokens are obtained from the official OAuth token endpoint; no API key is created.</p>
             </div>
             <div className="flex flex-wrap items-end gap-2 sm:col-span-2 lg:col-span-3">
               <Button onClick={handleStart} loading={starting} disabled={disabled || !proxyPoolId} icon="vpn_lock">
-                Start Proxy Login
+                Start OAuth via Proxy
               </Button>
             </div>
           </div>
@@ -454,7 +454,7 @@ export default function CodeBuddyCnAutomationModal({
             <div className="flex flex-col gap-3 rounded-xl border border-border p-4 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <div className="flex flex-wrap items-center gap-2">
-                  <h3 className="font-semibold text-text-main">{mode === "wrap-login" ? "Proxy login job" : "Bulk job"}</h3>
+                  <h3 className="font-semibold text-text-main">{mode === "wrap-login" ? "Proxy OAuth job" : "Bulk job"}</h3>
                   <Badge variant={statusVariant(job.status)}>{job.status}</Badge>
                 </div>
                 <p className="mt-1 break-all text-xs text-text-muted">{job.jobId}</p>

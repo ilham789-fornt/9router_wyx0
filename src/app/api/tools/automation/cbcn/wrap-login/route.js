@@ -4,8 +4,9 @@ import { assertProviderEnabled } from "@/lib/providerDisabled";
 
 export const dynamic = "force-dynamic";
 
-// Opens a CodeBuddy CN login browser through a selected server-side proxy.
-// This changes browser egress only; it does not override upstream account policy.
+// Opens the official CodeBuddy CN OAuth authorization page through a selected
+// server-side browser proxy. Tokens come from the OAuth token endpoint; this
+// flow does not create an API key or override upstream account policy.
 export async function POST(request) {
   try {
     await assertProviderEnabled("codebuddy-cn");

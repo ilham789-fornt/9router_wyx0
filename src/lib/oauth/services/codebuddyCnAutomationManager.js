@@ -18,6 +18,10 @@ import { runCodeBuddyCnLifecycle } from "./codebuddyCnLifecycle.js";
 import { detectCodeBuddyCnRestriction } from "./codebuddyCnBypass.js";
 import { resolveBulkImportProxy } from "./bulkImportProxyResolver.js";
 
+const CODEBUDDY_CN_PROVIDER_ID = "codebuddy-cn";
+const CODEBUDDY_CN_OAUTH_PLATFORM = "CLI";
+const CODEBUDDY_CN_STARTED_URL = "https://www.codebuddy.cn/started";
+
 const CODEBUDDY_CN_AUTOMATION_DIR = path.join(DATA_DIR, "codebuddy-cn-automation");
 const CODEBUDDY_CN_META_FILE = path.join(CODEBUDDY_CN_AUTOMATION_DIR, "meta.json");
 const ACTIVE_JOB_STATUSES = new Set(["queued", "running", "needs_manual"]);
@@ -1440,6 +1444,89 @@ async function defaultBrowserLauncher(browser = DEFAULT_AUTOMATION_BROWSER, opti
   })();
 }
 
+async function defaultRequestDeviceCode(providerId) {
+  const { requestDeviceCode } = await import("../providers.js");
+  return await requestDeviceCode(providerId);
+}
+
+async function defaultPollForToken(providerId, deviceCode) {
+  const { pollForToken } = await import("../providers.js");
+  return await pollForToken(providerId, deviceCode);
+}
+
+async function waitForCodeBuddyCnOAuthTokens(job, page, {
+  requestDeviceCode,
+  pollForToken,
+  onStep,
+} = {}) {
+  onStep?.("requesting_codebuddy_cn_oauth", "Requesting CodeBuddy CN OAuth login state");
+  const deviceData = await requestDeviceCode(CODEBUDDY_CN_PROVIDER_ID);
+  const authUrl = String(deviceData?.verification_uri || "").trim();
+  const deviceCode = String(deviceData?.device_code || "").trim();
+  if (!authUrl || !deviceCode) {
+    throw new Error("CodeBuddy CN did not return an OAuth login URL/state");
+  }
+
+  onStep?.("opening_codebuddy_cn_oauth", "Opening CodeBuddy CN OAuth login through the selected proxy");
+  await page.goto(authUrl, { waitUntil: "domcontentloaded", timeout: 30_000 });
+
+  const deadline = Date.now() + (job.options.smsTimeoutMs || DEFAULT_MANUAL_TIMEOUT_MS);
+  let startedCallbackCompleted = false;
+  while (Date.now() < deadline) {
+    if (job.cancelRequested) throw new Error("Job cancelled");
+    if (await detectCodeBuddyCnRestriction(page)) {
+      throw new Error("CodeBuddy CN account is restricted by upstream security policy (账号访问受限)");
+    }
+
+    const result = await pollForToken(CODEBUDDY_CN_PROVIDER_ID, deviceCode);
+    if (result?.success && result.tokens?.accessToken) {
+      onStep?.("codebuddy_cn_oauth_received", "CodeBuddy CN OAuth access token received");
+      await page.goto(CODEBUDDY_CN_HOME_URL, {
+        waitUntil: "domcontentloaded",
+        timeout: 30_000,
+      }).catch(() => null);
+      return {
+        accessToken: result.tokens.accessToken,
+        refreshToken: result.tokens.refreshToken || "",
+        providerSpecificData: result.tokens.providerSpecificData || {},
+        cookiesJson: JSON.stringify(await page.context().cookies().catch(() => [])),
+      };
+    }
+
+    // The phone login can finish as a valid CodeBuddy web session while the
+    // OAuth state remains pending. Complete the same /started callback used by
+    // the official browser flow, then let the token endpoint consume the state.
+    if (!startedCallbackCompleted) {
+      const session = await extractCredentialsFromBrowser(page).catch(() => null);
+      const currentUrl = typeof page.url === "function" ? page.url() : "";
+      const hasLoggedInSession = Boolean(session || (
+        currentUrl
+        && currentUrl.includes("codebuddy.cn")
+        && !currentUrl.includes("/auth/")
+        && !currentUrl.includes("/login")
+      ));
+      if (hasLoggedInSession) {
+        const startedUrl = new URL(CODEBUDDY_CN_STARTED_URL);
+        startedUrl.searchParams.set("platform", CODEBUDDY_CN_OAUTH_PLATFORM);
+        startedUrl.searchParams.set("state", deviceCode);
+        onStep?.("completing_codebuddy_cn_oauth", "Completing CodeBuddy CN OAuth browser callback");
+        await page.goto(startedUrl.toString(), {
+          waitUntil: "domcontentloaded",
+          timeout: 15_000,
+        }).catch(() => null);
+        startedCallbackCompleted = true;
+        continue;
+      }
+    }
+    if (!result?.pending && result?.error !== "authorization_pending" && result?.error !== "slow_down") {
+      throw new Error(result?.errorDescription || result?.error || "CodeBuddy CN OAuth polling failed");
+    }
+    onStep?.("polling_codebuddy_cn_oauth", "Waiting for CodeBuddy CN OAuth authorization");
+    await wait(job.options.pollIntervalMs || DEFAULT_POLL_INTERVAL_MS);
+  }
+  throw new Error("Timed out waiting for CodeBuddy CN OAuth authorization");
+}
+
 async function defaultSaveConnection(account) {
   const { createProviderConnection, updateProviderConnection } = await import("../../../models/index.js");
   const { assertProviderEnabled } = await import("@/lib/providerDisabled");
@@ -1619,6 +1706,8 @@ export class CodeBuddyCnAutomationManager {
     saveConnection = defaultSaveConnection,
     lifecycleRunner = runCodeBuddyCnLifecycle,
     createApiKey = createCodeBuddyCnApiKeyViaPage,
+    requestDeviceCodeFn = defaultRequestDeviceCode,
+    pollForTokenFn = defaultPollForToken,
     usageLoader = getUsageForProvider,
     storageName = "codebuddy-cn-automation",
   } = {}) {
@@ -1626,6 +1715,8 @@ export class CodeBuddyCnAutomationManager {
     this.saveConnection = saveConnection;
     this.lifecycleRunner = lifecycleRunner;
     this.createApiKey = createApiKey;
+    this.requestDeviceCode = requestDeviceCodeFn;
+    this.pollForToken = pollForTokenFn;
     this.usageLoader = usageLoader;
     this.storageDir = path.join(DATA_DIR, storageName);
     this.metaFile = path.join(this.storageDir, "meta.json");
@@ -1650,9 +1741,8 @@ export class CodeBuddyCnAutomationManager {
     proxyPoolId = null,
     proxyUrl = null,
   } = {}) {
-    // Login wrapping: resolve the launchable proxy from the selected pool or
-    // custom URL. When wrapLogin is active the saved connection bypasses the
-    // provider-disabled check and the browser egresses through this proxy.
+    // Proxy OAuth login: resolve one stable browser proxy for the complete
+    // authorization session. The local provider safety gate is still honored.
     let resolvedProxy = null;
     if (wrapLogin === true) {
       resolvedProxy = await resolveBulkImportProxy({ proxyPoolId, proxyUrl });
@@ -1743,7 +1833,7 @@ export class CodeBuddyCnAutomationManager {
           createLogEntry("queued", entry.hasCredentials
             ? "Queued credential import"
             : wrapLogin === true
-              ? "Queued login-wrapping registration through proxy"
+              ? "Queued OAuth login through proxy"
               : "Queued browser-assisted registration"),
         ],
       })),
@@ -1958,9 +2048,14 @@ export class CodeBuddyCnAutomationManager {
     if (job.cancelRequested) throw new Error("Job cancelled");
 
     account.accessToken = extracted.accessToken || account.accessToken;
+    account.refreshToken = extracted.refreshToken || account.refreshToken;
     account.jwtToken = extracted.jwtToken || account.jwtToken;
     account.apiKey = extracted.apiKey || account.apiKey;
     account.cookiesJson = extracted.cookiesJson || account.cookiesJson;
+    account.providerSpecificData = {
+      ...(account.providerSpecificData || {}),
+      ...(extracted.providerSpecificData || {}),
+    };
     account.hasCredentials = true;
 
     const selectedRegion = await selectCodeBuddyCnRegion(page).catch(() => ({ selected: false, region: null }));
@@ -1968,7 +2063,7 @@ export class CodeBuddyCnAutomationManager {
       this.setAccountStep(account, "region_selected", `Selected CodeBuddy CN region: ${selectedRegion.region}`);
     }
 
-    if (!account.apiKey) {
+    if (!job.options?.wrapLogin && !account.apiKey) {
       this.setAccountStep(account, "creating_codebuddy_cn_api_key", "Trying to create CodeBuddy CN API key from browser session");
       account.apiKey = await this.createApiKey(page, {
         keyName: account.apiKeyName || (account.apiKeyName = createCodeBuddyCnApiKeyName()),
@@ -2010,7 +2105,13 @@ export class CodeBuddyCnAutomationManager {
 
     if (job.cancelRequested) throw new Error("Job cancelled");
 
-    this.setAccountStep(account, "saving_connection", "Saving CodeBuddy CN connection from captured browser credentials");
+    this.setAccountStep(
+      account,
+      "saving_connection",
+      job.options?.wrapLogin
+        ? "Saving CodeBuddy CN OAuth connection from proxy-routed login"
+        : "Saving CodeBuddy CN connection from captured browser credentials"
+    );
     return await this.saveConnection(account);
   }
 
@@ -2046,16 +2147,27 @@ export class CodeBuddyCnAutomationManager {
       assertJobNotCancelled(job);
 
       this.setAccountStep(account, "opening_codebuddy_cn", "Opening CodeBuddy CN in a browser window");
-      await page.goto("https://www.codebuddy.cn", {
-        waitUntil: "domcontentloaded",
-        timeout: 30_000,
-      });
-      if (!job.options.fiveSimApiKey) {
-        await openCodeBuddyCnLoginUi(page).catch(() => false);
+      if (!job.options.wrapLogin) {
+        await page.goto("https://www.codebuddy.cn", {
+          waitUntil: "domcontentloaded",
+          timeout: 30_000,
+        });
       }
 
       let extracted = null;
-      if (job.options.fiveSimApiKey) {
+      if (job.options.wrapLogin) {
+        extracted = await waitForCodeBuddyCnOAuthTokens(job, page, {
+          requestDeviceCode: this.requestDeviceCode,
+          pollForToken: this.pollForToken,
+          onStep: (step, message) => this.setAccountStep(account, step, message),
+        });
+        account.providerSpecificData = {
+          ...(account.providerSpecificData || {}),
+          ...(extracted.providerSpecificData || {}),
+          authKind: "access_token",
+          proxyWrappedLogin: true,
+        };
+      } else if (job.options.fiveSimApiKey) {
         this.setAccountStep(account, "starting_5sim_registration", "Starting automatic CodeBuddy CN registration with 5sim");
         extracted = await runFiveSimRegistrationFlow(job, account, page, (step, message) => {
           if (step === "got_5sim_number") {
@@ -2066,6 +2178,7 @@ export class CodeBuddyCnAutomationManager {
       }
 
       if (!extracted) {
+        await openCodeBuddyCnLoginUi(page).catch(() => false);
         this.setAccountStep(account, "awaiting_manual_login", "Complete the login or registration flow in the opened browser");
         extracted = await waitForManualCredentials(job, account, page, (step, message) => {
           this.setAccountStep(account, step, message);
@@ -2220,4 +2333,5 @@ export const __test__ = {
   sanitizeJob,
   normalizePersistedSnapshot,
   acceptCodeBuddyCnLoginTerms,
+  waitForCodeBuddyCnOAuthTokens,
 };
