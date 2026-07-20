@@ -225,6 +225,7 @@ function CodeBuddyBulkTokenModal({ isOpen, onClose, onSuccess, disabled = false 
 function CodeBuddyAutomationPanel({ providerInfo, onRefresh, disabled = false }) {
   const [isOpen, setIsOpen] = useState(false);
   const [isBulkOpen, setIsBulkOpen] = useState(false);
+  const [isBulkGithubOpen, setIsBulkGithubOpen] = useState(false);
   const [isBulkTokenOpen, setIsBulkTokenOpen] = useState(false);
   const [isWrapOpen, setIsWrapOpen] = useState(false);
 
@@ -257,6 +258,20 @@ function CodeBuddyAutomationPanel({ providerInfo, onRefresh, disabled = false })
           </span>
           <span className="text-xs leading-relaxed text-text-muted">
             Run bulk GSuite gmail|password login with worker progress and manual assist.
+          </span>
+        </button>
+        <button
+          type="button"
+          onClick={() => setIsBulkGithubOpen(true)}
+          disabled={disabled}
+          className={getAutomationCardClasses(disabled)}
+        >
+          <span className="flex items-center gap-2 text-sm font-semibold text-text-main">
+            <span className="material-symbols-outlined text-[20px] text-primary">code</span>
+            Auto Login Bulk (GitHub)
+          </span>
+          <span className="text-xs leading-relaxed text-text-muted">
+            Sign up / log in CodeBuddy accounts via GitHub SSO in isolated Camoufox workers. Optional proxy pool, one github_username|password per line.
           </span>
         </button>
         <button
@@ -306,8 +321,25 @@ function CodeBuddyAutomationPanel({ providerInfo, onRefresh, disabled = false })
         title="CodeBuddy Bulk GSuite Login"
         serviceName="CodeBuddy"
         enableProxyPool
+        // CodeBuddy Global GSuite bulk physically requires one unique proxy
+        // per Camoufox worker. Auto pool is fine, direct mode is not.
+        requireProxyPool
         onSuccess={onRefresh}
         onClose={() => setIsBulkOpen(false)}
+      />
+      <BulkAccountAutomationModal
+        isOpen={isBulkGithubOpen && !disabled}
+        provider="codebuddy-github"
+        title="CodeBuddy Bulk Login (GitHub SSO)"
+        serviceName="CodeBuddy (GitHub)"
+        accountFormat="github_username_or_email|password"
+        introText="Sign up / log in CodeBuddy Global via GitHub SSO. One github_username_or_email|password per line. Choose Auto pool for maximum IP isolation, a specific pool for a curated set, or None (direct) to use the host IP. Accounts that hit GitHub 2FA, device verification, or CAPTCHA move to manual assist."
+        enableProxyPool
+        // GitHub SSO tolerates direct mode for small batches; leave the
+        // choice to the operator via the Auto pool / None / specific pool
+        // dropdown.
+        onSuccess={onRefresh}
+        onClose={() => setIsBulkGithubOpen(false)}
       />
       <OAuthModal
         isOpen={isOpen && !disabled}
@@ -477,8 +509,8 @@ const AUTOMATION_PROVIDERS = [
   {
     id: "codebuddy",
     label: "CodeBuddy",
-    description: "Bulk GSuite automation and browser OAuth polling login.",
-    supportedModes: ["bulk-account", "device-oauth", "wrap-login"],
+    description: "Bulk GSuite / GitHub automation and browser OAuth polling login.",
+    supportedModes: ["bulk-account", "github-bulk", "device-oauth", "wrap-login"],
     component: CodeBuddyAutomationPanel,
   },
   {
