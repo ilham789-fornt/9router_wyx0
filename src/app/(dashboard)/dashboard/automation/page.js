@@ -226,6 +226,7 @@ function CodeBuddyAutomationPanel({ providerInfo, onRefresh, disabled = false })
   const [isOpen, setIsOpen] = useState(false);
   const [isBulkOpen, setIsBulkOpen] = useState(false);
   const [isBulkGithubOpen, setIsBulkGithubOpen] = useState(false);
+  const [isBulkGithubRegisterOpen, setIsBulkGithubRegisterOpen] = useState(false);
   const [isBulkTokenOpen, setIsBulkTokenOpen] = useState(false);
   const [isWrapOpen, setIsWrapOpen] = useState(false);
 
@@ -272,6 +273,20 @@ function CodeBuddyAutomationPanel({ providerInfo, onRefresh, disabled = false })
           </span>
           <span className="text-xs leading-relaxed text-text-muted">
             Sign up / log in CodeBuddy accounts via GitHub SSO in isolated Camoufox workers. Optional proxy pool, one github_username|password per line.
+          </span>
+        </button>
+        <button
+          type="button"
+          onClick={() => setIsBulkGithubRegisterOpen(true)}
+          disabled={disabled}
+          className={getAutomationCardClasses(disabled)}
+        >
+          <span className="flex items-center gap-2 text-sm font-semibold text-text-main">
+            <span className="material-symbols-outlined text-[20px] text-primary">person_add</span>
+            Register via Temp-Mail (GitHub)
+          </span>
+          <span className="text-xs leading-relaxed text-text-muted">
+            Provision brand-new GitHub accounts via disposable email (Privatix) and chain each one into CodeBuddy OAuth in a single job. Just press start — emails, usernames, and passwords are generated automatically. Requires a proxy pool with unique proxies per account.
           </span>
         </button>
         <button
@@ -340,6 +355,29 @@ function CodeBuddyAutomationPanel({ providerInfo, onRefresh, disabled = false })
         // dropdown.
         onSuccess={onRefresh}
         onClose={() => setIsBulkGithubOpen(false)}
+      />
+      <BulkAccountAutomationModal
+        isOpen={isBulkGithubRegisterOpen && !disabled}
+        provider="codebuddy-github-register"
+        title="CodeBuddy Bulk Register (GitHub via Temp-Mail)"
+        serviceName="CodeBuddy (GitHub Register)"
+        // Backend generates every credential; the modal replaces the
+        // paste-accounts textarea with a numeric "how many?" input.
+        accountCountMode
+        introText="Provision fresh GitHub accounts through Privatix disposable email, then chain each one into CodeBuddy OAuth. One Camoufox context per account; every account lands on a different temp-mail domain. Requires a proxy pool with one unique proxy per account (GitHub blocks repeat signups from the same exit IP). Accounts that hit octocaptcha, phone verification, or OTP timeout move to manual assist."
+        enableProxyPool
+        // Unlike the bulk-login variant, register REQUIRES a proxy pool. The
+        // manager also enforces "one unique proxy per account" server-side,
+        // so this UI-level requireProxyPool guard is defense-in-depth.
+        requireProxyPool
+        // Concurrency ceiling is intentionally lower for register: each
+        // worker holds a Camoufox context through a multi-minute signup +
+        // OAuth flow, and GitHub's rate limits punish parallel signups from
+        // adjacent IPs.
+        defaultConcurrency={2}
+        maxConcurrency={4}
+        onSuccess={onRefresh}
+        onClose={() => setIsBulkGithubRegisterOpen(false)}
       />
       <OAuthModal
         isOpen={isOpen && !disabled}

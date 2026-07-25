@@ -38,13 +38,20 @@ export function parseProxyStringToObject(proxyUrl) {
   }
 }
 
-async function launchCamoufox({ headless = true, proxy } = {}) {
+async function launchCamoufox({ headless = true, proxy, humanize = false } = {}) {
   const { Camoufox } = await import("camoufox-js");
   const config = {
     headless,
     os: getHostFingerprintOs(),
     block_webrtc: true,
-    humanize: false,
+    // Camoufox humanize=true enables cursor/keyboard humanization at the
+    // browser process level (real mouse movement paths, per-key jitter,
+    // typing-speed variance). Reference: github-farm-edu farm.py sets
+    // this to True for signup workloads. Default false keeps every other
+    // automation flow bit-identical to how it ran before this option
+    // existed; only the register manager (which needs to survive GitHub's
+    // post-signup behavior scoring) opts in.
+    humanize: humanize === true,
   };
   if (!headless) config.window = COMPACT_VISIBLE_WINDOW;
   if (proxy) {
@@ -117,6 +124,8 @@ export function createAutomationBrowserLauncher(browser, options = {}) {
   const launchOptions = {
     headless: options.headless !== false,
     proxy: options.proxy || null,
+    // Passthrough for Camoufox's built-in humanization. Chromium ignores.
+    humanize: options.humanize === true,
   };
   return async function launchAutomationBrowser() {
     if (browserId === AUTOMATION_BROWSER_CHROMIUM) {

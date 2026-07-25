@@ -10,6 +10,8 @@
 - `start-standalone.mjs` owns standalone server startup behavior for production bundles.
 - `start-wyx-fast.cjs` owns the fast local WYx0 runtime entry used by `npm run wyx`.
 - `translate-readme.js` owns README translation automation for root documentation.
+- `test-imap-otp.mjs` owns the IMAP OTP reader smoke test used to verify Gmail catch-all forwarding before running the login automations.
+- `test-github-signup-e2e.mjs` owns the end-to-end smoke test for the CodeBuddy Global GitHub-register flow (temp-mail signup + chained CodeBuddy OAuth); side-effect free with respect to the app database, credentials are printed to stdout only.
 
 ## Local Contracts
 

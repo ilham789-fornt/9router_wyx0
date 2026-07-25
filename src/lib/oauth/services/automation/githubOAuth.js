@@ -539,7 +539,11 @@ async function forceAuthorizeSubmitViaJs(page) {
 // The caller (main automation loop) uses `no-imap-config` and `no-otp` to
 // bail into needs_manual so the operator can finish by hand; all other
 // return values are internal implementation detail.
-async function handleGithubDeviceVerification(page, reportStep, { targetEmail, otpTimeoutMs = 180_000 } = {}) {
+async function handleGithubDeviceVerification(page, reportStep, {
+  targetEmail,
+  otpTimeoutMs = 180_000,
+  tempMailClient = null,
+} = {}) {
   const url = page.url?.() || "";
   const looksLikeVerifyPage = GITHUB_DEVICE_VERIFY_URL_RE.test(url);
   if (!looksLikeVerifyPage) {
@@ -552,21 +556,6 @@ async function handleGithubDeviceVerification(page, reportStep, { targetEmail, o
     if (!headingHit) return { ok: false, reason: "not-verify-page" };
   }
 
-  reportStep("github_device_verification_detected", "GitHub asked for a device verification code — reading IMAP inbox");
-
-  const reader = otpReaderFromEnv({
-    senderMatch: "github",
-    otpPattern: GITHUB_DEVICE_OTP_RE,
-    confirmUrlPattern: GITHUB_DEVICE_CONFIRM_URL_RE,
-  });
-  if (!reader) {
-    reportStep(
-      "github_device_verification_needs_imap",
-      "GitHub device verification page reached but IMAP_USER/IMAP_PASS are not configured. Set them in .env to auto-solve; falling back to needs_manual."
-    );
-    return { ok: false, reason: "no-imap-config" };
-  }
-
   if (!targetEmail) {
     reportStep(
       "github_device_verification_no_target",
@@ -575,13 +564,61 @@ async function handleGithubDeviceVerification(page, reportStep, { targetEmail, o
     return { ok: false, reason: "no-target-email" };
   }
 
-  const otpHit = await reader.waitForOtpWithUrl(targetEmail, {
-    timeoutMs: otpTimeoutMs,
-    onStep: (step, message) => reportStep(step, message),
-  }).catch((err) => {
-    reportStep("github_device_verification_imap_error", `IMAP read failed: ${err?.message || err}`);
-    return null;
-  });
+  // Two OTP reader paths:
+  //   1. tempMailClient (register flow) — reads OTP from the mail Camoufox
+  //      context's temp-mail.org inbox. The client already knows the
+  //      email/token binding; we call waitForOtp() with the same OTP shape
+  //      (8-digit primary, 6-digit fallback) and confirm-URL pattern that
+  //      IMAP mode uses.
+  //   2. IMAP (bulk-login flow) — legacy path via otpImapReader.js, kept
+  //      unchanged so the existing bulk-login manager works.
+  // The two paths return the same shape ({ code, confirmUrl, ...}) so the
+  // downstream code below is the same regardless of source.
+  let otpHit = null;
+  if (tempMailClient?.waitForOtp) {
+    reportStep(
+      "github_device_verification_detected",
+      "GitHub asked for a device verification code — reading temp-mail inbox"
+    );
+    otpHit = await tempMailClient.waitForOtp(targetEmail, {
+      senderMatch: "github",
+      otpPattern: GITHUB_DEVICE_OTP_RE,
+      confirmUrlPattern: GITHUB_DEVICE_CONFIRM_URL_RE,
+      // The device-verify email arrives seconds after the OAuth login;
+      // subject filter helps skip the launch-code email if it is still
+      // in the inbox from the signup phase moments earlier.
+      subjectMatch: "verify your device",
+      timeoutMs: otpTimeoutMs,
+      onStep: (step, message) => reportStep(step, message),
+    }).catch((err) => {
+      reportStep("github_device_verification_tempmail_error", `temp-mail read failed: ${err?.message || err}`);
+      return null;
+    });
+  } else {
+    reportStep(
+      "github_device_verification_detected",
+      "GitHub asked for a device verification code — reading IMAP inbox"
+    );
+    const reader = otpReaderFromEnv({
+      senderMatch: "github",
+      otpPattern: GITHUB_DEVICE_OTP_RE,
+      confirmUrlPattern: GITHUB_DEVICE_CONFIRM_URL_RE,
+    });
+    if (!reader) {
+      reportStep(
+        "github_device_verification_needs_imap",
+        "GitHub device verification page reached but no OTP reader is configured. Set IMAP_USER/IMAP_PASS or provide tempMailClient; falling back to needs_manual."
+      );
+      return { ok: false, reason: "no-imap-config" };
+    }
+    otpHit = await reader.waitForOtpWithUrl(targetEmail, {
+      timeoutMs: otpTimeoutMs,
+      onStep: (step, message) => reportStep(step, message),
+    }).catch((err) => {
+      reportStep("github_device_verification_imap_error", `IMAP read failed: ${err?.message || err}`);
+      return null;
+    });
+  }
 
   if (!otpHit) return { ok: false, reason: "no-otp" };
 
@@ -769,6 +806,15 @@ export async function runGithubAccountAutomation({
   // page without operator intervention.
   otpTargetEmail = null,
   otpTimeoutMs = 180_000,
+  // Optional: pluggable temp-mail client (e.g. TempMailOrgDomClient bound to
+  // a Camoufox mail context). When provided, GitHub's device-verification
+  // OTP is read from this client's inbox instead of the classic IMAP reader
+  // in otpImapReader.js. The two paths are mutually exclusive — bulk-login
+  // flows without tempMailClient keep using IMAP unchanged, while the
+  // register flow injects its DOM-bound tempmail client here so the second
+  // OTP (device verification during CodeBuddy OAuth) is auto-solved from
+  // the same temp-mail.org inbox the signup OTP was read from.
+  tempMailClient = null,
 }) {
   const login = username || email || "";
   const startTime = Date.now();
@@ -825,6 +871,7 @@ export async function runGithubAccountAutomation({
           const deviceResult = await handleGithubDeviceVerification(page, reportStep, {
             targetEmail: otpTargetEmail || login,
             otpTimeoutMs,
+            tempMailClient,
           }).catch((err) => ({ ok: false, reason: `exception:${err?.message || err}` }));
           if (deviceResult?.ok) {
             reportStep("github_device_verification_cleared", `Cleared GitHub device verification via ${deviceResult.via}`);

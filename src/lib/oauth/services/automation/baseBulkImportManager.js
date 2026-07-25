@@ -345,6 +345,10 @@ async function defaultBrowserLauncher(browser = DEFAULT_AUTOMATION_BROWSER, opti
   return await createAutomationBrowserLauncher(browser, {
     headless: options.headless !== false,
     proxy: options.proxy || null,
+    // Only forward humanize when the caller explicitly set it — omitting
+    // the key entirely preserves the historical Camoufox default for the
+    // legacy flows that do not need extra behavioral mimicry.
+    ...(options.humanize === true ? { humanize: true } : {}),
   })();
 }
 

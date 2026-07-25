@@ -229,11 +229,46 @@ describe("CodeBuddyBulkImportManager", () => {
     expect(JSON.stringify(finished)).not.toContain("secret");
   });
 
-  it("rejects bulk jobs when the pool has fewer unique proxies than accounts", async () => {
+  it("reuses pool proxies round-robin when the pool has fewer proxies than accounts", async () => {
+    const launches = [];
     const manager = new CodeBuddyBulkImportManager({
       proxyResolver: async () => ({
         proxyUrls: ["http://proxy-1:8080"],
         proxyPoolId: "pool-small",
+        proxySource: "pool",
+        error: null,
+      }),
+      browserLauncher: async (_browser, options) => {
+        launches.push(options);
+        return createFakeBrowser();
+      },
+      requestDeviceCodeFn: async () => ({ device_code: "state", verification_uri: "https://www.codebuddy.ai/login" }),
+      pollToken: async () => ({ success: true, tokens: { accessToken: "access" } }),
+      googleAutomation: async ({ successPromise }) => ({ status: "success", ...(await successPromise) }),
+      createApiKeyTokens: async ({ tokens }) => ({ ...tokens, apiKey: "key" }),
+      saveConnection: async ({ email }) => ({ connection: { id: `conn-${email}` } }),
+    });
+
+    const started = await manager.startJob({
+      accounts: ["one@example.com|pw", "two@example.com|pw"],
+      concurrency: 2,
+      proxyPoolId: "pool-small",
+    });
+    const finished = await waitFor(() => {
+      const current = manager.getJob(started.jobId);
+      return current?.status === "completed" ? current : null;
+    });
+
+    expect(finished.summary.success).toBe(2);
+    // Both accounts launched with the single available pool proxy.
+    expect(launches.filter((opts) => opts.proxy === "http://proxy-1:8080")).toHaveLength(2);
+  });
+
+  it("rejects bulk jobs when the resolved proxy pool has no usable proxies", async () => {
+    const manager = new CodeBuddyBulkImportManager({
+      proxyResolver: async () => ({
+        proxyUrls: [],
+        proxyPoolId: "pool-empty",
         proxySource: "pool",
         error: null,
       }),
@@ -242,7 +277,7 @@ describe("CodeBuddyBulkImportManager", () => {
     await expect(manager.startJob({
       accounts: ["one@example.com|pw", "two@example.com|pw"],
       concurrency: 2,
-      proxyPoolId: "pool-small",
+      proxyPoolId: "pool-empty",
     })).rejects.toMatchObject({ status: 400 });
   });
 

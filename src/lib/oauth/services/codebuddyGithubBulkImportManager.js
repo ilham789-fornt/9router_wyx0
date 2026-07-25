@@ -63,7 +63,7 @@ import { resolveBulkImportProxy } from "./bulkImportProxyResolver.js";
 //      heuristics that some regions of the CodeBuddy console reuse.
 //   5. Playwright real click on Submit (trusted event). Falls back to a
 //      JS click + form submit if the button is still not clickable.
-async function humanizeRegionSelection(page, reportStep, preferredRegion = "Singapore") {
+export async function humanizeRegionSelection(page, reportStep, preferredRegion = "Singapore") {
   // Guard: only run on the /register/user/complete URL where the region
   // page is served. isProviderPage() is not tight enough on its own.
   const url = page.url?.() || "";
@@ -270,10 +270,10 @@ async function humanizeRegionSelection(page, reportStep, preferredRegion = "Sing
   return false;
 }
 
-const CODEBUDDY_PROVIDER_ID = "codebuddy";
-const CODEBUDDY_LABEL = "CodeBuddy (GitHub)";
+export const CODEBUDDY_PROVIDER_ID = "codebuddy";
+export const CODEBUDDY_LABEL = "CodeBuddy (GitHub)";
 const CODEBUDDY_POLL_TIMEOUT_MS = 15 * 60_000;
-const CODEBUDDY_POLL_INTERVAL_MS = 5_000;
+export const CODEBUDDY_POLL_INTERVAL_MS = 5_000;
 const CODEBUDDY_MAX_TRANSIENT_POLL_ERRORS = 6;
 const CODEBUDDY_COOKIE_DOMAINS = new Set(["codebuddy.ai", "www.codebuddy.ai"]);
 const CODEBUDDY_BASE_URL = "https://www.codebuddy.ai";
@@ -306,7 +306,7 @@ function wait(ms, signal) {
   });
 }
 
-function normalizeCodeBuddyAuthUrl(rawUrl, state) {
+export function normalizeCodeBuddyAuthUrl(rawUrl, state) {
   if (!rawUrl && !state) return rawUrl;
   const url = rawUrl ? new URL(rawUrl) : new URL("https://www.codebuddy.ai/login");
   const platform = url.searchParams.get("platform") || "CLI";
@@ -319,7 +319,7 @@ function normalizeCodeBuddyAuthUrl(rawUrl, state) {
 
 // ── Connection & Token Helpers ─────────────────────────────────────────────
 
-async function defaultSaveCodeBuddyGithubConnection({
+export async function defaultSaveCodeBuddyGithubConnection({
   tokens, email, proxyPoolId, proxySource,
 }) {
   const { createProviderConnection } = await import("../../../models/index.js");
@@ -365,12 +365,12 @@ async function defaultSaveCodeBuddyGithubConnection({
   return { connection };
 }
 
-async function defaultRequestDeviceCode(providerId) {
+export async function defaultRequestDeviceCode(providerId) {
   const { requestDeviceCode } = await import("../providers.js");
   return requestDeviceCode(providerId);
 }
 
-async function defaultPollForToken(providerId, deviceCode) {
+export async function defaultPollForToken(providerId, deviceCode) {
   const { pollForToken } = await import("../providers.js");
   return pollForToken(providerId, deviceCode);
 }
@@ -397,7 +397,7 @@ async function captureCodeBuddyWebCookie(context) {
   }
 }
 
-async function attachCodeBuddyWebCookie(context, tokens = {}) {
+export async function attachCodeBuddyWebCookie(context, tokens = {}) {
   const webCookie = await captureCodeBuddyWebCookie(context);
   if (!webCookie) return tokens;
   return { ...tokens, webCookie, webCookieCapturedAt: new Date().toISOString() };
@@ -493,7 +493,7 @@ async function createCodeBuddyApiKeyViaPage(page, userEnterpriseId = CODEBUDDY_D
   return apiKey;
 }
 
-async function defaultCreateCodeBuddyApiKeyTokens({ page, tokens = {}, onStep }) {
+export async function defaultCreateCodeBuddyApiKeyTokens({ page, tokens = {}, onStep }) {
   onStep?.("preparing_codebuddy_backend_session", "Preparing CodeBuddy backend session");
   const identity = await prepareCodeBuddyBackendSession(page);
 
@@ -516,7 +516,7 @@ async function defaultCreateCodeBuddyApiKeyTokens({ page, tokens = {}, onStep })
 
 // ── Token Polling (unchanged from Google flow) ─────────────────────────────
 
-function createCodeBuddyPollPromise({
+export function createCodeBuddyPollPromise({
   deviceCode, pollToken, onStep, signal, shouldCancel, onPending,
   timeoutMs = CODEBUDDY_POLL_TIMEOUT_MS,
   pollIntervalMs = CODEBUDDY_POLL_INTERVAL_MS,
@@ -567,7 +567,7 @@ const CODEBUDDY_DASHBOARD_URL = "https://www.codebuddy.ai/home";
 const CODEBUDDY_COMPLETE_REGISTER_TIMEOUT_MS = 30_000;
 const CODEBUDDY_COMPLETE_REGISTER_POLL_MS = 1_500;
 
-async function completeCodeBuddyRegistration(page, onStep) {
+export async function completeCodeBuddyRegistration(page, onStep) {
   const reportStep = (step, message) => onStep?.(step, message);
   try {
     reportStep("navigating_to_dashboard", "Navigating to CodeBuddy to complete registration");
@@ -652,23 +652,27 @@ export class CodeBuddyGithubBulkImportManager extends BaseBulkImportManager {
       normalizedAccounts = parsed;
     }
 
-    // Proxy is optional here. When a pool is provided, ensure it has enough
-    // unique proxies to give each worker a distinct exit IP.
+    // Proxy is optional here. When a pool is provided, distribute proxies
+    // round-robin across workers; a pool smaller than the account count is
+    // allowed and will simply reuse proxies across accounts.
     let resolvedProxy = null;
     if (proxyPoolId) {
       resolvedProxy = await this.proxyResolver({ proxyPoolId });
       if (resolvedProxy.error) {
         throw Object.assign(new Error(resolvedProxy.error), { error: resolvedProxy.error, status: 400 });
       }
-      if ((resolvedProxy.proxyUrls || []).length < normalizedAccounts.length) {
-        const error = `Proxy pool needs at least ${normalizedAccounts.length} unique proxies for ${normalizedAccounts.length} accounts`;
+      if (!(resolvedProxy.proxyUrls || []).length) {
+        const error = "Proxy pool has no usable proxies";
         throw Object.assign(new Error(error), { error, status: 400 });
       }
     }
 
+    const availableProxyUrls = resolvedProxy?.proxyUrls || [];
     const proxyByLine = new Map((normalizedAccounts || []).map((account, index) => [
       account.line,
-      resolvedProxy?.proxyUrls?.[index] || null,
+      availableProxyUrls.length
+        ? availableProxyUrls[index % availableProxyUrls.length]
+        : null,
     ]));
 
     const sanitizedJob = super.startJob({

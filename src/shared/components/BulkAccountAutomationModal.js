@@ -189,11 +189,21 @@ export default function BulkAccountAutomationModal({
   // worker. When false (default when enableProxyPool is on), the operator
   // may pick "None (direct)" and the workers launch without a proxy.
   requireProxyPool = false,
+  // When true, the modal replaces the bulk-accounts textarea with a single
+  // numeric input ("How many accounts to provision?"). The backend
+  // automation generates emails/usernames/passwords on its own — this is
+  // used by the CodeBuddy Global GitHub-register flow which provisions
+  // fresh accounts via temp-mail. When false (default), the modal keeps
+  // its existing behavior of pasting `email|password` lines.
+  accountCountMode = false,
 }) {
   const storageKey = `${provider}-bulk-import-active-job`;
   const notify = useNotificationStore();
   const completedRefreshJobsRef = useRef(new Set());
   const [bulkText, setBulkText] = useState("");
+  // Only used when accountCountMode=true. Empty string means "let the
+  // server pick a random batch size (default 20..30)".
+  const [accountCount, setAccountCount] = useState("");
   const fallbackRecommendation = useMemo(() => getRecommendedConcurrency({ defaultConcurrency, maxConcurrency }), [defaultConcurrency, maxConcurrency]);
   const [concurrency, setConcurrency] = useState(() => String(getRecommendedConcurrency({ defaultConcurrency, maxConcurrency }).value));
   const [activeJob, setActiveJob] = useState(null);
@@ -281,6 +291,7 @@ export default function BulkAccountAutomationModal({
 
   const resetState = useCallback(() => {
     setBulkText("");
+    setAccountCount("");
     setConcurrency(String(recommendedConcurrency.value));
     setActiveJob(null);
     setError(null);
@@ -356,14 +367,48 @@ export default function BulkAccountAutomationModal({
   }, [activeJob?.jobId, finishedJob, isOpen, notify, onSuccess, provider, serviceName, storageKey]);
 
   const handleStartBulk = async () => {
-    const lines = bulkText
-      .split("\n")
-      .map((line) => line.trim())
-      .filter(Boolean);
+    // Two body shapes depending on the mode:
+    //   accountCountMode=true  → send `{ count }` (backend generates
+    //     credentials from temp-mail; count may be omitted for auto-random).
+    //   accountCountMode=false → send `{ accounts: [...lines] }` (existing
+    //     bulk-login shape used by every other CodeBuddy flow).
+    let requestBody;
+    if (accountCountMode) {
+      const trimmedCount = String(accountCount || "").trim();
+      let numericCount;
+      if (trimmedCount === "") {
+        numericCount = undefined; // let the server pick 20..30
+      } else {
+        const parsed = Number.parseInt(trimmedCount, 10);
+        if (!Number.isFinite(parsed) || parsed <= 0) {
+          setError("Account count must be a positive integer, or leave it empty to use the server default (20..30).");
+          return;
+        }
+        numericCount = parsed;
+      }
+      requestBody = {
+        ...(Number.isFinite(numericCount) ? { count: numericCount } : {}),
+        concurrency: Number.parseInt(concurrency, 10) || defaultConcurrency,
+        browser: browserChoice,
+        ...(enableProxyPool ? { proxyPoolId } : {}),
+      };
+    } else {
+      const lines = bulkText
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean);
 
-    if (!lines.length) {
-      setError("Please enter at least one gmail|password line");
-      return;
+      if (!lines.length) {
+        setError("Please enter at least one gmail|password line");
+        return;
+      }
+
+      requestBody = {
+        accounts: lines,
+        concurrency: Number.parseInt(concurrency, 10) || defaultConcurrency,
+        browser: browserChoice,
+        ...(enableProxyPool ? { proxyPoolId } : {}),
+      };
     }
 
     setImporting(true);
@@ -374,12 +419,7 @@ export default function BulkAccountAutomationModal({
       const res = await fetch(`/api/oauth/${provider}/bulk-import`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          accounts: lines,
-          concurrency: Number.parseInt(concurrency, 10) || defaultConcurrency,
-          browser: browserChoice,
-          ...(enableProxyPool ? { proxyPoolId } : {}),
-        }),
+        body: JSON.stringify(requestBody),
       });
       const data = await readBulkApiResponse(res, "Bulk account import failed");
       if (!res.ok) {
@@ -459,20 +499,44 @@ export default function BulkAccountAutomationModal({
               </p>
             </div>
 
-            <div>
-              <label className="mb-2 block text-sm font-medium">
-                Bulk Accounts <span className="text-red-500">*</span>
-              </label>
-              <textarea
-                value={bulkText}
-                onChange={(event) => setBulkText(event.target.value)}
-                placeholder={accountFormat === "email|password" ? "user1@example.com|password1\nuser2@example.com|password2" : "gmail1@example.com|password1\ngmail2@example.com|password2"}
-                className="min-h-[180px] w-full resize-y rounded-lg border border-border bg-background px-3 py-2 font-mono text-sm focus:outline-none focus:ring-1 focus:ring-primary"
-              />
-              <p className="mt-1 text-xs text-text-muted">
-                One account per line in the format {accountFormat}.
-              </p>
-            </div>
+            {accountCountMode ? (
+              <div>
+                <label htmlFor={`${provider}-bulk-count`} className="mb-2 block text-sm font-medium">
+                  How many accounts to provision?
+                  <span className="ml-1 text-xs font-normal text-text-muted">(optional)</span>
+                </label>
+                <Input
+                  id={`${provider}-bulk-count`}
+                  type="number"
+                  min="1"
+                  max="100"
+                  value={accountCount}
+                  onChange={(event) => setAccountCount(event.target.value)}
+                  placeholder="Leave empty for a random batch of 20..30"
+                />
+                <p className="mt-1 text-xs text-text-muted">
+                  Emails, usernames, and passwords are generated automatically
+                  from the temp-mail pool. Every account lands on a different
+                  disposable-email domain to avoid same-domain detection.
+                  Leave empty to let the server pick a random 20..30 batch.
+                </p>
+              </div>
+            ) : (
+              <div>
+                <label className="mb-2 block text-sm font-medium">
+                  Bulk Accounts <span className="text-red-500">*</span>
+                </label>
+                <textarea
+                  value={bulkText}
+                  onChange={(event) => setBulkText(event.target.value)}
+                  placeholder={accountFormat === "email|password" ? "user1@example.com|password1\nuser2@example.com|password2" : "gmail1@example.com|password1\ngmail2@example.com|password2"}
+                  className="min-h-[180px] w-full resize-y rounded-lg border border-border bg-background px-3 py-2 font-mono text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+                />
+                <p className="mt-1 text-xs text-text-muted">
+                  One account per line in the format {accountFormat}.
+                </p>
+              </div>
+            )}
 
             <div>
               <label className="mb-2 block text-sm font-medium">Concurrent Workers</label>
@@ -752,14 +816,17 @@ export default function BulkAccountAutomationModal({
               fullWidth
               disabled={
                 importing
-                || !bulkText.trim()
+                // In accountCountMode the operator may leave the count blank
+                // (auto-random), so we only require a non-empty textarea in
+                // the legacy paste-mode.
+                || (!accountCountMode && !bulkText.trim())
                 // Only gate on proxy selection when the flow actually needs
                 // one. "" (None/direct) is valid for optional flows and Auto
                 // pool is always a valid non-empty sentinel.
                 || (enableProxyPool && requireProxyPool && !proxyPoolId)
               }
             >
-              {importing ? "Starting..." : "Start Bulk Login"}
+              {importing ? "Starting..." : accountCountMode ? "Start Bulk Register" : "Start Bulk Login"}
             </Button>
           )}
           {activeJob && !finishedJob && (
@@ -794,4 +861,5 @@ BulkAccountAutomationModal.propTypes = {
   introText: PropTypes.string,
   enableProxyPool: PropTypes.bool,
   requireProxyPool: PropTypes.bool,
+  accountCountMode: PropTypes.bool,
 };

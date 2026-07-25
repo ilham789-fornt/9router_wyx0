@@ -500,17 +500,25 @@ export class CodeBuddyBulkImportManager extends BaseBulkImportManager {
       if (resolvedProxy.error) {
         throw Object.assign(new Error(resolvedProxy.error), { error: resolvedProxy.error, status: 400 });
       }
-      if ((resolvedProxy.proxyUrls || []).length < normalizedAccounts.length) {
-        const error = `Proxy pool needs at least ${normalizedAccounts.length} unique proxies for ${normalizedAccounts.length} accounts`;
+      if (!(resolvedProxy.proxyUrls || []).length) {
+        const error = "Proxy pool has no usable proxies";
         throw Object.assign(new Error(error), { error, status: 400 });
       }
     }
 
+    // Distribute proxies to accounts. When the pool has fewer proxies than
+    // accounts, cycle through the available proxies (round-robin) so every
+    // worker still launches with a proxy — the pool no longer needs a unique
+    // exit IP per account. Operators who want strictly unique IPs should
+    // provide a pool sized to match their account count.
+    const availableProxyUrls = resolvedProxy?.proxyUrls || [];
     const proxyByLine = new Map((normalizedAccounts || []).map((account, index) => [
       account.line,
       wrapLogin
         ? resolvedProxy?.proxyUrl || null
-        : resolvedProxy?.proxyUrls?.[index] || null,
+        : availableProxyUrls.length
+          ? availableProxyUrls[index % availableProxyUrls.length]
+          : null,
     ]));
 
     const sanitizedJob = super.startJob({
