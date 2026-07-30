@@ -7,6 +7,7 @@ import Badge from "./Badge";
 import Button from "./Button";
 import Input from "./Input";
 import Modal from "./Modal";
+import Toggle from "./Toggle";
 import { DEFAULT_AUTOMATION_BROWSER } from "@/shared/constants/automationBrowsers";
 import { useNotificationStore } from "@/store/notificationStore";
 
@@ -196,6 +197,7 @@ export default function BulkAccountAutomationModal({
   // fresh accounts via temp-mail. When false (default), the modal keeps
   // its existing behavior of pasting `email|password` lines.
   accountCountMode = false,
+  enableHumanMode = false,
 }) {
   const storageKey = `${provider}-bulk-import-active-job`;
   const notify = useNotificationStore();
@@ -204,6 +206,7 @@ export default function BulkAccountAutomationModal({
   // Only used when accountCountMode=true. Empty string means "let the
   // server pick a random batch size (default 20..30)".
   const [accountCount, setAccountCount] = useState("");
+  const [humanMode, setHumanMode] = useState(false);
   const fallbackRecommendation = useMemo(() => getRecommendedConcurrency({ defaultConcurrency, maxConcurrency }), [defaultConcurrency, maxConcurrency]);
   const [concurrency, setConcurrency] = useState(() => String(getRecommendedConcurrency({ defaultConcurrency, maxConcurrency }).value));
   const [activeJob, setActiveJob] = useState(null);
@@ -292,6 +295,7 @@ export default function BulkAccountAutomationModal({
   const resetState = useCallback(() => {
     setBulkText("");
     setAccountCount("");
+    setHumanMode(false);
     setConcurrency(String(recommendedConcurrency.value));
     setActiveJob(null);
     setError(null);
@@ -391,6 +395,7 @@ export default function BulkAccountAutomationModal({
         concurrency: Number.parseInt(concurrency, 10) || defaultConcurrency,
         browser: browserChoice,
         ...(enableProxyPool ? { proxyPoolId } : {}),
+        ...(enableHumanMode ? { humanMode } : {}),
       };
     } else {
       const lines = bulkText
@@ -408,6 +413,7 @@ export default function BulkAccountAutomationModal({
         concurrency: Number.parseInt(concurrency, 10) || defaultConcurrency,
         browser: browserChoice,
         ...(enableProxyPool ? { proxyPoolId } : {}),
+        ...(enableHumanMode ? { humanMode } : {}),
       };
     }
 
@@ -571,6 +577,16 @@ export default function BulkAccountAutomationModal({
               </div>
               <p className="mt-1 text-xs text-text-muted">Runs isolated browser workers in the background.</p>
             </div>
+            {enableHumanMode && (
+              <div className="rounded-lg border border-border bg-background p-3">
+                <Toggle
+                  checked={humanMode}
+                  onChange={setHumanMode}
+                  label={`Human mode: ${humanMode ? "true" : "false"}`}
+                  description="Opens visible workers and adds longer pauses around Google credentials and consent. Use it when Google or CodeBuddy changes screens slowly."
+                />
+              </div>
+            )}
             {enableProxyPool && (
               <div className="rounded-lg border border-border bg-background p-3">
                 <label htmlFor={`${provider}-bulk-proxy-pool`} className="mb-1 block text-sm font-medium">
@@ -862,4 +878,5 @@ BulkAccountAutomationModal.propTypes = {
   enableProxyPool: PropTypes.bool,
   requireProxyPool: PropTypes.bool,
   accountCountMode: PropTypes.bool,
+  enableHumanMode: PropTypes.bool,
 };

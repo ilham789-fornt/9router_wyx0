@@ -339,6 +339,7 @@ function CodeBuddyAutomationPanel({ providerInfo, onRefresh, disabled = false })
         // CodeBuddy Global GSuite bulk physically requires one unique proxy
         // per Camoufox worker. Auto pool is fine, direct mode is not.
         requireProxyPool
+        enableHumanMode
         onSuccess={onRefresh}
         onClose={() => setIsBulkOpen(false)}
       />
