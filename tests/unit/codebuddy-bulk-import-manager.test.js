@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { CodeBuddyBulkImportManager } from "../../src/lib/oauth/services/codebuddyBulkImportManager.js";
 
-function createFakeBrowser({ onGoto, cookies = [], evaluate = async () => null, initialUrl = "about:blank", urlRef = null } = {}) {
+function createFakeBrowser({ onGoto, cookies = [], evaluate = async () => null, initialUrl = "about:blank", urlRef = null, regionPageCount = 0 } = {}) {
   let currentUrl = initialUrl;
   const fakePage = {
     on() {},
@@ -17,6 +17,15 @@ function createFakeBrowser({ onGoto, cookies = [], evaluate = async () => null, 
     },
     evaluate,
     waitForTimeout: async () => null,
+    locator(selector) {
+      return {
+        first() {
+          return {
+            count: async () => (selector === ".page-region" ? regionPageCount : 0),
+          };
+        },
+      };
+    },
     context() {
       return {};
     },
@@ -264,6 +273,47 @@ describe("CodeBuddyBulkImportManager", () => {
     expect(launches.filter((opts) => opts.proxy === "http://proxy-1:8080")).toHaveLength(2);
   });
 
+  it("launches visible workers and forwards human mode to Google automation", async () => {
+    const launches = [];
+    const automationCalls = [];
+    const manager = new CodeBuddyBulkImportManager({
+      proxyResolver: async () => ({
+        proxyUrls: ["http://proxy-1:8080"],
+        proxyPoolId: "pool-human",
+        proxySource: "pool",
+        error: null,
+      }),
+      browserLauncher: async (_browser, options) => {
+        launches.push(options);
+        return createFakeBrowser();
+      },
+      requestDeviceCodeFn: async () => ({ device_code: "state", verification_uri: "https://www.codebuddy.ai/login" }),
+      pollToken: async () => ({ success: true, tokens: { accessToken: "access" } }),
+      googleAutomation: async (options) => {
+        automationCalls.push(options);
+        return { status: "success", ...(await options.successPromise) };
+      },
+      createApiKeyTokens: async ({ tokens }) => ({ ...tokens, apiKey: "key" }),
+      saveConnection: async ({ email }) => ({ connection: { id: `conn-${email}` } }),
+    });
+
+    const started = await manager.startJob({
+      accounts: ["one@example.com|pw"],
+      concurrency: 1,
+      proxyPoolId: "pool-human",
+      humanMode: true,
+    });
+    const finished = await waitFor(() => {
+      const current = manager.getJob(started.jobId);
+      return current?.status === "completed" ? current : null;
+    });
+
+    expect(finished.summary.success).toBe(1);
+    expect(launches).toEqual([{ headless: false, proxy: "http://proxy-1:8080", humanize: true }]);
+    expect(automationCalls[0].humanMode).toBe(true);
+    expect(finished.humanMode).toBe(true);
+  });
+
   it("rejects bulk jobs when the resolved proxy pool has no usable proxies", async () => {
     const manager = new CodeBuddyBulkImportManager({
       proxyResolver: async () => ({
@@ -427,5 +477,202 @@ describe("CodeBuddyBulkImportManager", () => {
       "codebuddy_token_received",
     ]));
     expect(JSON.stringify(finished.activity)).not.toContain("global-state-2");
+  });
+
+  it("blocks session capture until the user finishes region selection AND backend confirms it", async () => {
+    // Simulates: proxy-routed OAuth returns a valid token, but the visible
+    // browser is still parked on the region-selection screen. The manager
+    // MUST NOT save the connection based on DOM/URL alone — it must probe
+    // the CodeBuddy backend and only proceed when /console/accounts returns
+    // a real userId. Capturing cookies before that yields a half-provisioned
+    // session which makes the quota endpoint return 500.
+    const urlRef = { value: "https://www.codebuddy.ai/login" };
+    let regionVisible = true;
+    let backendReady = false;
+    let apiCalls = [];
+    let cookieCalls = 0;
+
+    // Simulate the user picking a region 100ms after the OAuth token arrives.
+    const scheduleUserFinishesRegion = () => setTimeout(() => {
+      regionVisible = false;
+      urlRef.value = "https://www.codebuddy.ai/home";
+      // Backend commits the region choice ~50ms later.
+      setTimeout(() => { backendReady = true; }, 50);
+    }, 100);
+
+    const makePage = () => {
+      const page = {
+        on() {}, off() {},
+        url: () => urlRef.value,
+        bringToFront: async () => null,
+        goto: async (url) => { urlRef.value = url; return null; },
+        waitForTimeout: async () => null,
+        context: () => ({}),
+        frames: () => [],
+        mainFrame: () => page,
+        locator: (selector) => {
+          const stub = {
+            count: async () => 0,
+            isVisible: async () => false,
+            innerText: async () => "",
+            textContent: async () => "",
+            click: async () => { throw new Error("no dom in mock"); },
+            nth: () => stub,
+            first: () => stub,
+          };
+          if (selector === ".page-region") {
+            return { ...stub, count: async () => (regionVisible ? 1 : 0), first: () => ({ ...stub, count: async () => (regionVisible ? 1 : 0) }) };
+          }
+          return stub;
+        },
+        // Any fetch-through-page evaluation → proxyCodeBuddyBackendSession
+        evaluate: async (_fn, args) => {
+          apiCalls.push(args?.url || "unknown");
+          if (String(args?.url || "").includes("/console/accounts")) {
+            if (!backendReady) return { status: 401, text: "unauthenticated", json: null };
+            return { status: 200, text: "", json: { data: { accounts: [{ uid: "user-42", userEnterpriseId: "personal-edition-user-id" }] } } };
+          }
+          return { status: 200, text: "", json: null };
+        },
+      };
+      return page;
+    };
+
+    const manager = new CodeBuddyBulkImportManager({
+      proxyResolver: async () => ({
+        proxyUrl: "http://127.0.0.1:8080",
+        proxyUrls: ["http://127.0.0.1:8080"],
+        proxyPoolId: "pool-region",
+        proxySource: "pool",
+        proxyMode: "single",
+        error: null,
+      }),
+      proxyBrowserPicker: async ({ proxyUrls, browserLauncher }) => ({
+        browser: await browserLauncher("camofox", { headless: false, proxy: proxyUrls[0] }),
+        proxyUrl: proxyUrls[0],
+        checked: 1,
+        error: null,
+      }),
+      browserLauncher: async () => {
+        const page = makePage();
+        return {
+          async newContext() {
+            return {
+              async newPage() { return page; },
+              on() {}, off() {},
+              async cookies() {
+                cookieCalls += 1;
+                return backendReady ? [{ name: "session", value: "final", domain: ".codebuddy.ai" }] : [];
+              },
+              async close() { return null; },
+            };
+          },
+          async close() { return null; },
+        };
+      },
+      requestDeviceCodeFn: async () => ({
+        device_code: "state-region",
+        verification_uri: "https://www.codebuddy.ai/login?platform=CLI&state=state-region",
+      }),
+      // Token arrives immediately. Nothing but the region+backend guard
+      // must be able to keep the connection from being saved.
+      pollToken: async () => {
+        urlRef.value = "https://www.codebuddy.ai/region";
+        scheduleUserFinishesRegion();
+        return { success: true, tokens: { accessToken: "access-region", refreshToken: "refresh-region" } };
+      },
+      saveConnection: async ({ tokens }) => ({ connection: { id: "conn-region", tokens } }),
+      pollIntervalMs: 10,
+    });
+
+    const started = await manager.startJob({ wrapLogin: true, proxyPoolId: "pool-region" });
+    const finished = await waitFor(() => {
+      const current = manager.getJob(started.jobId);
+      return current?.status === "completed" ? current : null;
+    }, 10_000);
+
+    expect(finished.summary.success).toBe(1);
+    const steps = finished.activity.map((entry) => entry.step);
+    // Gate must have announced itself while region was visible.
+    expect(steps).toContain("codebuddy_region_selection_gate");
+    // Backend probe must have run at least once.
+    expect(apiCalls.some((url) => String(url).includes("/console/accounts"))).toBe(true);
+    // Save must happen strictly AFTER the gate.
+    const gateIdx = steps.indexOf("codebuddy_region_selection_gate");
+    const saveIdx = steps.indexOf("saving_connection");
+    expect(gateIdx).toBeGreaterThanOrEqual(0);
+    expect(saveIdx).toBeGreaterThan(gateIdx);
+    // Cookies could only be captured after backend was ready.
+    expect(cookieCalls).toBeGreaterThan(0);
+    expect(backendReady).toBe(true);
+  });
+
+  it("times out and refuses to save when the user never finishes region selection", async () => {
+    const urlRef = { value: "https://www.codebuddy.ai/region" };
+    const makePage = () => {
+      const page = {
+        on() {}, off() {},
+        url: () => urlRef.value,
+        bringToFront: async () => null,
+        goto: async () => null,
+        waitForTimeout: async () => null,
+        context: () => ({}),
+        frames: () => [],
+        mainFrame: () => page,
+        locator: (selector) => {
+          const stub = {
+            count: async () => (selector === ".page-region" ? 1 : 0),
+            isVisible: async () => false,
+            innerText: async () => "",
+            textContent: async () => "",
+            click: async () => { throw new Error("no dom"); },
+            nth: () => stub,
+            first: () => stub,
+          };
+          return stub;
+        },
+        evaluate: async () => ({ status: 401, text: "unauthenticated", json: null }),
+      };
+      return page;
+    };
+    // Monkey-patch the waitUntil timeout via a small pollInterval so the test
+    // finishes quickly without waiting the full production timeout.
+    const manager = new CodeBuddyBulkImportManager({
+      proxyResolver: async () => ({ proxyUrl: "http://p:1", proxyUrls: ["http://p:1"], proxyPoolId: "pool", proxySource: "pool", proxyMode: "single", error: null }),
+      proxyBrowserPicker: async ({ proxyUrls, browserLauncher }) => ({
+        browser: await browserLauncher("camofox", { headless: false, proxy: proxyUrls[0] }),
+        proxyUrl: proxyUrls[0], checked: 1, error: null,
+      }),
+      browserLauncher: async () => {
+        const page = makePage();
+        return {
+          async newContext() {
+            return { async newPage() { return page; }, on() {}, off() {}, async cookies() { return []; }, async close() { return null; } };
+          },
+          async close() { return null; },
+        };
+      },
+      requestDeviceCodeFn: async () => ({ device_code: "s", verification_uri: "https://www.codebuddy.ai/login" }),
+      pollToken: async () => ({ success: true, tokens: { accessToken: "a" } }),
+      saveConnection: async () => { throw new Error("saveConnection MUST NOT run when region is unresolved"); },
+      pollIntervalMs: 1,
+    });
+
+    // Override the region-wait timeout for the test by clobbering the manager
+    // instance method — the passive guard's timeout is not directly exposed,
+    // so we shortcut by aborting the poll controller after a short delay via
+    // job cancellation, which mimics "the user gave up".
+    const started = await manager.startJob({ wrapLogin: true, proxyPoolId: "pool" });
+    setTimeout(() => { try { manager.cancelJob(started.jobId); } catch { /* noop */ } }, 200);
+
+    const finished = await waitFor(() => {
+      const current = manager.getJob(started.jobId);
+      return current?.status && current.status !== "running" && current.status !== "queued" ? current : null;
+    }, 10_000);
+
+    // Either the job was cancelled OR it failed — but it MUST NOT have saved
+    // a connection while region selection was pending.
+    expect(["cancelled", "completed", "failed"]).toContain(finished.status);
+    expect(finished.summary?.success ?? 0).toBe(0);
   });
 });

@@ -229,6 +229,7 @@ export function sanitizeJob(job, extras = {}) {
     summary: buildSummary(job.accounts),
     concurrency: job.concurrency,
     browser: job.browserChoice || DEFAULT_AUTOMATION_BROWSER,
+    ...(typeof job.humanMode === "boolean" ? { humanMode: job.humanMode } : {}),
     createdAt: job.createdAt,
     startedAt: job.startedAt,
     finishedAt: job.finishedAt,

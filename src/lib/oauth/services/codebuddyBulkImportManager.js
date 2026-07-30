@@ -169,7 +169,18 @@ async function captureCodeBuddyWebCookie(context) {
   }
 }
 
-async function attachCodeBuddyWebCookie(context, tokens = {}) {
+async function attachCodeBuddyWebCookie(context, tokens = {}, page = null) {
+  // Safety net: even if callers forget the explicit region gate, refuse to
+  // capture the web cookie while the region-selection page is still visible.
+  // A cookie captured there is a half-provisioned session that makes the
+  // CodeBuddy quota endpoint return 500.
+  if (page) {
+    const stillOnRegionPage = await isCodeBuddyRegionSelectionPage(page).catch(() => false);
+    if (stillOnRegionPage) {
+      console.warn("[CodeBuddy] attachWebCookie: skipping capture — browser is still on the region-selection page");
+      return tokens;
+    }
+  }
   const webCookie = await captureCodeBuddyWebCookie(context);
   if (!webCookie) return tokens;
   return { ...tokens, webCookie, webCookieCapturedAt: new Date().toISOString() };
@@ -346,6 +357,167 @@ function createCodeBuddyPollPromise({
   })();
 }
 
+// Paths that belong to pre-session onboarding flows. A browser parked on one of
+// these paths must NOT be treated as an established CodeBuddy web session — the
+// cookies captured there are incomplete and make the quota endpoint return 500.
+const CODEBUDDY_PRE_SESSION_PATH_RE = /^\/(?:region|onboarding|welcome|get-started|select-region)(?:\/|$)/i;
+
+// Paths that indicate the browser has left onboarding and is now inside the
+// authenticated console/dashboard. Only these count as a "real" post-region
+// session for the purpose of capturing cookies + saving the connection.
+const CODEBUDDY_POST_REGION_PATH_RE = /^\/(?:home|dashboard|console|billing|profile|settings|workspace|ide|chat)(?:\/|$)/i;
+
+async function readCodeBuddyPageSignals(page) {
+  const signals = {
+    url: "",
+    pathname: "",
+    onRegionPath: false,
+    onPostRegionPath: false,
+    regionDomVisible: false,
+  };
+
+  try {
+    signals.url = typeof page?.url === "function" ? String(page.url() || "") : "";
+    if (signals.url) {
+      const parsed = new URL(signals.url);
+      signals.pathname = parsed.pathname || "";
+      signals.onRegionPath = CODEBUDDY_PRE_SESSION_PATH_RE.test(signals.pathname);
+      signals.onPostRegionPath = CODEBUDDY_POST_REGION_PATH_RE.test(signals.pathname);
+    }
+  } catch {
+    // ignore malformed URLs
+  }
+
+  if (typeof page?.locator === "function") {
+    try {
+      const [regionRoot, regionHeading, regionSubmit] = await Promise.all([
+        page.locator(".page-region").first().count().catch(() => 0),
+        page.locator("text=/select\\s+(?:your\\s+)?region|choose\\s+(?:your\\s+)?region|data\\s+region/i").first().count().catch(() => 0),
+        page.locator(".page-region button, .page-region [role='button']").first().count().catch(() => 0),
+      ]);
+      signals.regionDomVisible = Boolean(regionRoot || regionHeading || regionSubmit);
+    } catch {
+      // best-effort; fall back to URL heuristics
+    }
+  }
+
+  return signals;
+}
+
+async function isCodeBuddyRegionSelectionPage(page) {
+  const signals = await readCodeBuddyPageSignals(page).catch(() => null);
+  if (!signals) return false;
+  return signals.onRegionPath || signals.regionDomVisible;
+}
+
+/**
+ * Probes the CodeBuddy backend through the authenticated browser context to
+ * confirm the session is actually usable. This is the ONLY reliable signal
+ * that the user finished region selection — the /console/accounts endpoint
+ * returns a real account payload only after the region is committed
+ * server-side. A missing or 4xx/5xx response means the cookie in the jar is a
+ * half-provisioned session that will make the quota endpoint return 500.
+ */
+async function probeCodeBuddyBackendSession(page) {
+  try {
+    const result = await codeBuddyRequestViaPage(page, "GET", CODEBUDDY_CONSOLE_ACCOUNTS_ENDPOINT);
+    if (result.status !== 200) return { ok: false, reason: `accounts_http_${result.status}` };
+    if (result.payload?.code !== 0 && result.payload?.code !== undefined) {
+      return { ok: false, reason: `accounts_code_${result.payload.code}` };
+    }
+    const identity = getCodeBuddyAccountIdentity(result.payload);
+    if (!identity.userId) return { ok: false, reason: "accounts_no_user_id" };
+    return { ok: true, identity };
+  } catch (error) {
+    return { ok: false, reason: `probe_threw_${error?.message || "unknown"}` };
+  }
+}
+
+/**
+ * PASSIVELY waits until the CodeBuddy region-selection page is gone AND the
+ * backend session is actually valid. Never clicks anything on the picker —
+ * the previous approach called handleCodeBuddyRegionPage() which could submit
+ * the form with an unselected region, producing exactly the half-provisioned
+ * session that makes the quota endpoint return 500. Now the user must
+ * complete region selection themselves; the manager just watches.
+ *
+ * Only returns cleared:true when BOTH conditions hold:
+ *   1) region DOM is no longer visible AND URL is on a post-region path
+ *   2) the /console/accounts probe succeeds with a real userId
+ *
+ * This eliminates the race where the region form momentarily unmounts during
+ * client-side navigation before the backend has committed the choice.
+ */
+async function waitUntilCodeBuddyRegionCleared(page, onStep, {
+  timeoutMs = 5 * 60_000,
+  pollIntervalMs = 2_000,
+  signal,
+  shouldCancel,
+} = {}) {
+  const startedAt = Date.now();
+  let announced = false;
+  let lastReason = null;
+  // Only require backend confirmation if we have seen evidence of the region
+  // page at least once. Otherwise a plain wrap-login flow that never hit a
+  // region picker would be forced to probe the backend for no reason.
+  let sawRegionPage = false;
+
+  while (Date.now() - startedAt < timeoutMs) {
+    if (signal?.aborted || shouldCancel?.()) return { cleared: false, reason: "cancelled" };
+
+    const signals = await readCodeBuddyPageSignals(page).catch(() => null);
+    const regionStillVisible = Boolean(signals?.onRegionPath || signals?.regionDomVisible);
+
+    if (regionStillVisible) {
+      sawRegionPage = true;
+      if (!announced) {
+        onStep?.(
+          "codebuddy_region_selection_gate",
+          "Region selection screen detected — waiting for the user to pick a region before saving the session"
+        );
+        announced = true;
+      }
+      await wait(pollIntervalMs, signal);
+      continue;
+    }
+
+    // Region page is not visible.
+    if (!sawRegionPage) {
+      // Nothing suspicious was ever seen — accept the session immediately.
+      return { cleared: true };
+    }
+
+    // Region was visible before and has now disappeared. That alone is not
+    // enough: client-side navigation may unmount the picker before the
+    // backend has committed the choice, and an automated submit-click with
+    // an unselected default can transiently hide the picker without a valid
+    // region actually being saved. Confirm via /console/accounts.
+    const probe = await probeCodeBuddyBackendSession(page);
+    if (probe.ok) {
+      onStep?.(
+        "codebuddy_region_selection_cleared",
+        "CodeBuddy region selection confirmed by backend; safe to capture the web session"
+      );
+      return { cleared: true, identity: probe.identity };
+    }
+    if (probe.reason !== lastReason) {
+      onStep?.(
+        "codebuddy_region_selection_backend_pending",
+        `Region page hidden but backend session not yet ready (${probe.reason}); waiting for user`
+      );
+      lastReason = probe.reason;
+    }
+
+    await wait(pollIntervalMs, signal);
+  }
+
+  onStep?.(
+    "codebuddy_region_selection_timeout",
+    "Timed out waiting for CodeBuddy region selection; refusing to save a half-provisioned session"
+  );
+  return { cleared: false, reason: "timeout" };
+}
+
 async function completeCodeBuddyOAuthState(page, deviceCode, onStep) {
   const currentUrl = typeof page?.url === "function" ? String(page.url() || "") : "";
   let parsed = null;
@@ -358,6 +530,20 @@ async function completeCodeBuddyOAuthState(page, deviceCode, onStep) {
   const isGlobalSessionPage = parsed?.hostname === "www.codebuddy.ai"
     && !/^\/(?:login|auth)(?:\/|$)/.test(parsed.pathname);
   if (!isGlobalSessionPage) return { completed: false, reason: "web_session_not_ready" };
+
+  // Passive region guard: if the browser is on the region-selection screen
+  // we MUST NOT try to click through it here — an automated click can submit
+  // the form with an unselected default and produce a half-provisioned
+  // session that makes the quota endpoint return 500. Simply report that we
+  // are waiting for the user; the next poll will re-check.
+  const regionPickerVisible = await isCodeBuddyRegionSelectionPage(page).catch(() => false);
+  if (regionPickerVisible) {
+    onStep?.(
+      "codebuddy_region_selection_pending",
+      "CodeBuddy region selection screen visible; waiting for the user before capturing the session"
+    );
+    return { completed: false, reason: "region_selection_pending" };
+  }
 
   onStep?.("codebuddy_web_session_detected", "Authenticated CodeBuddy Global browser session detected");
 
@@ -382,7 +568,7 @@ const CODEBUDDY_DASHBOARD_URL = "https://www.codebuddy.ai/home";
 const CODEBUDDY_COMPLETE_REGISTER_TIMEOUT_MS = 30_000;
 const CODEBUDDY_COMPLETE_REGISTER_POLL_MS = 1_500;
 
-async function completeCodeBuddyRegistration(page, onStep) {
+async function completeCodeBuddyRegistration(page, onStep, { humanMode = false } = {}) {
   const reportStep = (step, message) => onStep?.(step, message);
 
   try {
@@ -399,8 +585,10 @@ async function completeCodeBuddyRegistration(page, onStep) {
       const handledStarted = await handleCodeBuddyStartedAuthorization(page, reportStep);
       if (handledStarted) { handledAnything = true; await page.waitForTimeout(CODEBUDDY_COMPLETE_REGISTER_POLL_MS); continue; }
 
-      const handledRegion = await handleCodeBuddyRegionPage(page, reportStep);
-      if (handledRegion) { handledAnything = true; await page.waitForTimeout(CODEBUDDY_COMPLETE_REGISTER_POLL_MS); continue; }
+      if (!humanMode) {
+        const handledRegion = await handleCodeBuddyRegionPage(page, reportStep);
+        if (handledRegion) { handledAnything = true; await page.waitForTimeout(CODEBUDDY_COMPLETE_REGISTER_POLL_MS); continue; }
+      }
 
       const handledOnboarding = await handleProviderOnboarding(page, reportStep, CODEBUDDY_LABEL);
       if (handledOnboarding) { handledAnything = true; await page.waitForTimeout(CODEBUDDY_COMPLETE_REGISTER_POLL_MS); continue; }
@@ -456,6 +644,7 @@ export class CodeBuddyBulkImportManager extends BaseBulkImportManager {
     wrapLogin = false,
     proxyPoolId = null,
     proxyUrl = null,
+    humanMode = false,
   } = {}) {
     let normalizedAccounts = parsedAccounts;
 
@@ -526,8 +715,9 @@ export class CodeBuddyBulkImportManager extends BaseBulkImportManager {
       concurrency: wrapLogin ? 1 : concurrency,
       browser,
       browserLaunchOptions: ({ account }) => ({
-        headless: wrapLogin ? false : true,
+        headless: wrapLogin || humanMode ? false : true,
         proxy: proxyByLine.get(account.line),
+        ...(humanMode ? { humanize: true } : {}),
       }),
       prelaunchedBrowsers: wrapLogin && resolvedProxy.browser
         ? new Map([[normalizedAccounts[0].line, resolvedProxy.browser]])
@@ -539,6 +729,7 @@ export class CodeBuddyBulkImportManager extends BaseBulkImportManager {
       job.proxyPoolId = resolvedProxy?.proxyPoolId || null;
       job.proxySource = resolvedProxy?.proxySource || null;
       job.proxyChecked = resolvedProxy?.proxyChecked || null;
+      job.humanMode = humanMode === true;
       job.accounts.forEach((account) => {
         account.proxyWrappedLogin = wrapLogin === true;
       });
@@ -567,10 +758,30 @@ export class CodeBuddyBulkImportManager extends BaseBulkImportManager {
           await completeCodeBuddyRegistration(manualPage, (step, message) => {
             this.setAccountStep(account, step, message);
             void this.persistJobSnapshot(job, { forcePreview: false });
-          });
+          }, { humanMode: true });
         }
         if (!manualPage) {
           throw new Error("CodeBuddy browser session missing for API key creation");
+        }
+
+        // Region-selection guard for the manual-assist path too — the user
+        // may have logged in but not yet chosen the region when successPromise
+        // resolves, so we must wait before hitting the backend.
+        const regionGate = await waitUntilCodeBuddyRegionCleared(
+          manualPage,
+          (step, message) => {
+            this.setAccountStep(account, step, message);
+            void this.persistJobSnapshot(job, { forcePreview: false });
+          },
+          { shouldCancel: () => job.cancelRequested }
+        );
+        if (job.cancelRequested) throw new Error("Job cancelled");
+        if (!regionGate.cleared) {
+          throw new Error(
+            regionGate.reason === "timeout"
+              ? "CodeBuddy region selection did not complete in time; refusing to create an API key on a half-provisioned session"
+              : "CodeBuddy region selection did not complete; refusing to create an API key on a half-provisioned session"
+          );
         }
 
         const tokensWithApiKey = await this.createApiKeyTokens({
@@ -585,7 +796,7 @@ export class CodeBuddyBulkImportManager extends BaseBulkImportManager {
 
         this.setAccountStep(account, "saving_connection", "Saving CodeBuddy API key connection");
         await this.persistJobSnapshot(job, { forcePreview: true });
-        const tokensWithCookie = await attachCodeBuddyWebCookie(context, tokensWithApiKey);
+        const tokensWithCookie = await attachCodeBuddyWebCookie(context, tokensWithApiKey, manualPage);
         const { connection } = await this.saveConnection({
           tokens: { ...tokensWithCookie, isActive: false },
           email: account.email,
@@ -695,9 +906,31 @@ export class CodeBuddyBulkImportManager extends BaseBulkImportManager {
         const result = await successPromise;
         if (job.cancelRequested) throw new Error("Job cancelled");
 
+        // Region-selection guard: even after the OAuth token arrives, the
+        // proxy-routed browser can still be sitting on the region picker.
+        // Capturing cookies and saving the connection there yields a
+        // half-provisioned session that makes the quota endpoint return 500.
+        // Block until the picker is cleared before touching cookies.
+        const regionGate = await waitUntilCodeBuddyRegionCleared(
+          page,
+          (step, message) => {
+            this.setAccountStep(account, step, message);
+            void this.persistJobSnapshot(job, { forcePreview: false });
+          },
+          { signal: pollController.signal, shouldCancel: () => job.cancelRequested, pollIntervalMs: this.pollIntervalMs }
+        );
+        if (job.cancelRequested) throw new Error("Job cancelled");
+        if (!regionGate.cleared) {
+          throw new Error(
+            regionGate.reason === "timeout"
+              ? "CodeBuddy region selection did not complete in time; refusing to save a half-provisioned session"
+              : "CodeBuddy region selection did not complete; refusing to save a half-provisioned session"
+          );
+        }
+
         this.setAccountStep(account, "saving_connection", "Saving CodeBuddy OAuth connection from proxy-routed login");
         await this.persistJobSnapshot(job, { forcePreview: true });
-        const tokensWithCookie = await attachCodeBuddyWebCookie(context, result.tokens || {});
+        const tokensWithCookie = await attachCodeBuddyWebCookie(context, result.tokens || {}, page);
         if (job.cancelRequested) throw new Error("Job cancelled");
         const { connection } = await this.saveConnection({
           tokens: {
@@ -738,6 +971,7 @@ export class CodeBuddyBulkImportManager extends BaseBulkImportManager {
         successStep: "codebuddy_token_received",
         successMessage: "CodeBuddy OAuth token received",
         allowProviderRestrictedBypass: true,
+        humanMode: job.humanMode === true,
         restrictedBypassStep: "codebuddy_restricted_bypass",
         restrictedBypassMessage: "CodeBuddy restricted page detected; continuing with backend API key request",
         onStep: (step, message) => {
@@ -756,7 +990,28 @@ export class CodeBuddyBulkImportManager extends BaseBulkImportManager {
         await completeCodeBuddyRegistration(page, (step, message) => {
           this.setAccountStep(account, step, message);
           void this.persistJobSnapshot(job, { forcePreview: false });
-        });
+        }, { humanMode: job.humanMode === true });
+
+        // Region-selection guard: registration completion tries to clear the
+        // picker on a best-effort basis but can bail out early. Enforce a hard
+        // block before we hit the backend so the API-key call never runs on
+        // top of a half-provisioned session.
+        const regionGate = await waitUntilCodeBuddyRegionCleared(
+          page,
+          (step, message) => {
+            this.setAccountStep(account, step, message);
+            void this.persistJobSnapshot(job, { forcePreview: false });
+          },
+          { signal: pollController.signal, shouldCancel: () => job.cancelRequested }
+        );
+        if (job.cancelRequested) throw new Error("Job cancelled");
+        if (!regionGate.cleared) {
+          throw new Error(
+            regionGate.reason === "timeout"
+              ? "CodeBuddy region selection did not complete in time; refusing to create an API key on a half-provisioned session"
+              : "CodeBuddy region selection did not complete; refusing to create an API key on a half-provisioned session"
+          );
+        }
 
         const tokensWithApiKey = await this.createApiKeyTokens({
           page,
@@ -770,7 +1025,7 @@ export class CodeBuddyBulkImportManager extends BaseBulkImportManager {
 
         this.setAccountStep(account, "saving_connection", "Saving CodeBuddy API key connection");
         await this.persistJobSnapshot(job, { forcePreview: true });
-        const tokensWithCookie = await attachCodeBuddyWebCookie(context, tokensWithApiKey);
+        const tokensWithCookie = await attachCodeBuddyWebCookie(context, tokensWithApiKey, page);
         const { connection } = await this.saveConnection({
           tokens: { ...tokensWithCookie, isActive: false },
           email: account.email,
