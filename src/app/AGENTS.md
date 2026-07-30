@@ -21,6 +21,7 @@
 - Present Camoufox as the single automation runtime in dashboard flows; do not expose browser-runtime selection controls.
 - OAuth-via-proxy dashboard flows select active browser-compatible proxy pools by ID and delegate proxy resolution, browser launch, token polling, and credential persistence to provider-local services.
 - CodeBuddy Global bulk GSuite UI requires an active browser-compatible proxy pool; only the pool ID crosses the client boundary, while the provider manager enforces one unique proxy per account.
+- The CodeBuddy Global GSuite modal exposes an opt-in human-mode boolean; the route accepts only literal `true` and delegates all timing and browser behavior to the provider manager.
 - CodeBuddy Global GitHub-register UI (temp-mail signup + chained OAuth) requires an active browser-compatible proxy pool with one unique proxy per requested account; the shared BulkAccountAutomationModal enters `accountCountMode` for this flow, replacing the paste-accounts textarea with a numeric input and sending `{ count }` (or nothing, for auto-random 20..30) to `/api/oauth/codebuddy-github-register/bulk-import`. Temp-mail credentials, generated GitHub credentials, and proxy URLs never cross the client boundary.
 - Keep `/api/system/capacity` limited to coarse server CPU/RAM capacity data for local worker recommendations; do not expose sensitive host details.
 - Keep CodeBuddy CN out of the generic OAuth Providers section: its provider detail deep-links to the dedicated Automation tab, where OAuth and 5sim bulk registration remain separate modes.

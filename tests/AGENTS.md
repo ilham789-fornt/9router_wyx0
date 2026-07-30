@@ -23,6 +23,8 @@
 - Run the narrowest relevant test file during development, then broaden to the owning suite.
 - Mock external services at stable module or network boundaries.
 - For provider automation, mirror the existing route and bulk-manager test pattern so job lifecycle, invalid input handling, and saved-connection behavior stay covered offline.
+- CodeBuddy Global bulk-login tests cover human-mode route forwarding, visible Camoufox launch options, and sanitized job metadata without exposing proxy credentials.
+- Google consent regression tests must cover localized fixed-footer controls and reject synthetic-click false positives by requiring the trusted locator path when it is available.
 - Keep live tests gated by an explicit environment variable and tolerant only of genuine credential or quota failures.
 
 ## Verification

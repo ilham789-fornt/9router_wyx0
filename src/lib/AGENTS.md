@@ -39,8 +39,9 @@
 - CodeBuddy CN automation follows the recovered enow lifecycle: create the API key, probe credits and gateway state, run best-effort activation, then save credentials with activation and probation metadata; activation uncertainty must not discard otherwise valid credentials.
 - CodeBuddy CN 5sim registration must confirm the SMS login surface before buying a number, request OTPs through the visible CodeBuddy UI, and retry after cooldowns without using direct SMS endpoints.
 - Keep 5sim client behavior centralized in `oauth/services/fiveSimClient.js`, including token validation, price/stock quote caching, OTP polling, and proxy-dispatched fetches.
-- Google automation must evaluate Google OAuth consent before credential inputs and directly probe its approval control; Google can retain a visible password field, localize the consent copy, and place the action in a fixed footer. Consent locator fallbacks must be short and force-enabled so one atypical Google page cannot stall a bulk worker.
+- Google automation must evaluate Google OAuth consent before credential inputs and prefer a short, force-enabled native locator click on its approval control; synthetic DOM events are fallback-only because Google may ignore untrusted clicks while leaving the fixed, localized consent footer visible.
 - After submitting a Google identifier or password, preserve a short transition cooldown before interacting with that same field again; Google can leave the old field visible while navigation is still in progress.
+- CodeBuddy Global human mode is opt-in job metadata: launch visible Camoufox workers with native humanization and use longer transition pauses without weakening consent, region, cancellation, or credential validation gates.
 - Bulk import cancellation must immediately finalize active accounts and prevent late browser callbacks from changing cancelled results or saving new credentials.
 - Handle corrupt, absent, and legacy data explicitly where the surrounding module supports recovery.
 

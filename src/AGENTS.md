@@ -17,6 +17,7 @@
 - Preserve the boundary between application routes in `src/app`, application orchestration in `src/sse`, and provider-neutral runtime behavior in `open-sse`.
 - Reuse shared constants, stores, hooks, and UI components instead of duplicating cross-dashboard behavior.
 - Shared bulk automation components may expose provider-specific copy, worker limits, and device-based worker recommendations; Camoufox is the single browser runtime and bulk workers run headless by default.
+- CodeBuddy Global GSuite bulk login may enable an explicit human mode; it opens visible Camoufox workers, enables native humanization, and adds longer pauses around Google credential and consent transitions.
 - Keep `camoufox-js` pinned to the browser-asset-compatible release; package drift can generate unsupported fingerprint properties before any provider flow starts.
 - Proxy-routed OAuth wrapping uses one visible Camoufox session, persists only sanitized proxy-pool metadata, and leaves provider endpoint selection in the provider registry.
 - Keep CodeBuddy CN account activation and gateway-probation handling in provider-local OAuth services; routes and dashboard components consume sanitized job state only.
