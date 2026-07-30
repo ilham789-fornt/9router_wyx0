@@ -97,6 +97,23 @@ describe("CodeBuddy bulk import routes", () => {
     expect(managerMock.startJob.mock.calls[0][0]).not.toHaveProperty("proxyUrl");
   });
 
+  it("forwards an explicit human mode boolean to bulk jobs", async () => {
+    managerMock.startJob.mockResolvedValue({ jobId: "job-human", status: "running" });
+    const { POST } = await import("../../src/app/api/oauth/codebuddy/bulk-import/route.js");
+    const response = await POST({
+      json: async () => ({
+        accounts: ["user@example.com|secret"],
+        proxyPoolId: "pool-1",
+        humanMode: true,
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(managerMock.startJob).toHaveBeenCalledWith(expect.objectContaining({
+      humanMode: true,
+    }));
+  });
+
   it("returns JSON when the job is missing", async () => {
     managerMock.cancelJob.mockReturnValue(null);
 

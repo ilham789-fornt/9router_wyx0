@@ -34,6 +34,7 @@ export async function POST(request) {
       concurrency: body?.concurrency,
       browser: body?.browser,
       proxyPoolId: typeof body?.proxyPoolId === "string" ? body.proxyPoolId.trim() : null,
+      humanMode: body?.humanMode === true,
     });
 
     return NextResponse.json({
