@@ -18,60 +18,177 @@ const NEXT_BUTTON_SELECTORS = [
   'div[role="button"]:has-text("Berikutnya")',
 ];
 
-// Keep the locator fallback deliberately small. The DOM path below is the
-// primary path; this is only for a footer rendered after the first DOM probe.
-// A broad selector list with a five-second click timeout can stall one worker
+// Multilingual "approve/continue" action patterns used by Google's consent
+// screens. Kept as one source of truth so the DOM path, locator fallback, and
+// trusted mouse-click fallback all recognize the same set of labels.
+// Language coverage (non-exhaustive but production-tested):
+//   en:  Continue, Allow, Accept, Yes, OK, Got it, I understand
+//   id:  Lanjutkan, Izinkan, Setuju, Berikutnya, Saya mengerti, Oke, OK
+//   ms:  Teruskan, Benarkan, Bersetuju
+//   es:  Continuar, Permitir, Aceptar, Sí, De acuerdo, Entendido
+//   pt:  Continuar, Permitir, Aceitar, Sim, Concordo, Entendi
+//   ca:  Continua, Permet, Accepta
+//   fr:  Continuer, Autoriser, Accepter, Oui, D'accord, J'ai compris
+//   de:  Weiter, Zulassen, Akzeptieren, Zustimmen, Verstanden
+//   it:  Continua, Consenti, Accetta, Ho capito
+//   nl:  Doorgaan, Toestaan, Accepteren, Akkoord
+//   ru:  Продолжить, Разрешить, Принять, Согласен, Понятно
+//   uk:  Продовжити, Дозволити, Прийняти
+//   tr:  Devam, İzin ver, Kabul et, Anladım
+//   vi:  Tiếp tục, Cho phép, Đồng ý, Chấp nhận
+//   fil: Magpatuloy, Payagan, Sumang-ayon
+//   th:  ดำเนินการต่อ, อนุญาต, ยอมรับ, เข้าใจแล้ว
+//   ja:  続行, 許可, 同意する, 承諾, 次へ, 了解
+//   ko:  계속, 허용, 동의, 다음, 확인
+//   zh:  继续, 允许, 同意, 接受, 下一步, 我知道了 (+ traditional variants)
+//   ar:  متابعة, السماح, موافقة, نعم, حسنا
+//   he:  המשך, אפשר, אשר, כן
+//   hi:  जारी रखें, अनुमति दें, स्वीकार करें, ठीक है, समझ गया
+const GOOGLE_CONSENT_ACTION_PATTERN = /^(?:\s*(?:continue|allow|accept|approve|yes|ok(?:ay)?|oke|got it|i understand|next|lanjutkan|izinkan|setuju|berikutnya|saya mengerti|teruskan|benarkan|bersetuju|continuar|permitir|aceptar|s[ií]|de acuerdo|entendido|continua|permet|accepta|aceitar|concordo|entendi|continuer|autoriser|accepter|oui|d'accord|j'ai compris|weiter|zulassen|akzeptieren|zustimmen|verstanden|consenti|accetta|ho capito|doorgaan|toestaan|accepteren|akkoord|продовжити|дозволити|прийняти|продолжить|разрешить|принять|согласен|понятно|devam|i̇zin ver|kabul et|anladım|tiếp tục|cho phép|đồng ý|chấp nhận|magpatuloy|payagan|sumang-ayon|ดำเนินการต่อ|อนุญาต|ยอมรับ|เข้าใจแล้ว|続行|許可|同意する|承諾|次へ|了解|계속|허용|동의|다음|확인|继续|允许|同意|接受|下一步|我知道了|繼續|允許|同意|接受|下一步|我知道了|متابعة|السماح|موافقة|نعم|حسنا|המשך|אפשר|אשר|כן|जारी रखें|अनुमति दें|स्वीकार करें|ठीक है|समझ गया)\s*)$/iu;
+
+// Locator fallback in strict order. First entry that matches wins. Keep this
+// short — a giant list with five-second click timeouts can stall one worker
 // for minutes when Google renders a slightly different consent document.
+// The universal jsname="LgbsSe" is Google's Material action button on the
+// newer /signin/oauth/id consent screen; text is not hard-coded here because
+// it changes with the user's locale.
 const GOOGLE_CONSENT_FALLBACK_SELECTORS = [
   '#submit_approve_access button',
   '#submit_approve_access',
-  'button:has-text("Lanjutkan")',
-  'div[role="button"]:has-text("Lanjutkan")',
-  'button:has-text("Izinkan")',
-  'div[role="button"]:has-text("Izinkan")',
-  'button:has-text("Allow")',
-  'div[role="button"]:has-text("Allow")',
-  'button:has-text("Continue")',
-  'div[role="button"]:has-text("Continue")',
+  'button[jsname="LgbsSe"]',
+  'div[jsname="LgbsSe"]',
+  '[jsname="LgbsSe"][role="button"]',
 ];
 
+// On /signin/oauth/id and workspace-tos speedbump surfaces, Google renders
+// BOTH a "Cancel" and a "Continue/Allow" button with jsname="LgbsSe". The
+// fallback used to click the first LgbsSe in DOM order, which is Cancel on
+// the modern consent layout — the redirect_uri then carries
+// error=access_denied and CodeBuddy treats the account as restricted.
+// We must exclude any candidate whose label matches a localized cancel/deny
+// word before the real-mouse / locator / DOM click path.
+// Language coverage mirrors GOOGLE_CONSENT_ACTION_PATTERN.
+const GOOGLE_CONSENT_CANCEL_PATTERN = /^\s*(?:cancel|deny|no thanks|not now|batal|batalkan|tidak|tidak sekarang|no|non|abbrechen|abbrechen\.|annullieren|ablehnen|annuler|refuser|cancelar|denegar|rechazar|no gracias|annulla|nega|rifiuta|annuleer|weiger|отмена|отклонить|нет|скасувати|іптал|iptal|reddet|hủy|từ chối|kanselahin|tanggihan|ยกเลิก|ปฏิเสธ|キャンセル|拒否|いいえ|취소|거부|아니오|取消|拒绝|不允许|拒絕|不允許|إلغاء|رفض|לא|בטל|רד|रद्द|अस्वीकार)\s*$/iu;
+
+// Locale-aware helper: given a text label, returns true if it looks like a
+// cancel/deny/no action. Used to skip such buttons in every consent fallback.
+function looksLikeCancelLabel(label) {
+  return GOOGLE_CONSENT_CANCEL_PATTERN.test(String(label || "").trim());
+}
+
+// Read a locator's visible label (aria-label > value > innerText/textContent).
+// Kept synchronous-ish: returns "" on any failure so callers can just skip.
+async function readLocatorLabel(locator) {
+  try {
+    const aria = await locator.getAttribute?.("aria-label").catch(() => null);
+    if (aria) return String(aria).trim();
+    const value = await locator.getAttribute?.("value").catch(() => null);
+    if (value) return String(value).trim();
+    const text = await locator.innerText?.({ timeout: 1000 }).catch(() => "")
+      || await locator.textContent?.({ timeout: 1000 }).catch(() => "")
+      || "";
+    return String(text || "").trim();
+  } catch {
+    return "";
+  }
+}
+
+// Approve/continue buttons across Google, CodeBuddy, and other provider
+// onboarding screens. Universal DOM anchors first (locale-agnostic), then
+// broad multilingual text fallbacks. When adding a new language, append the
+// localized action words to GOOGLE_CONSENT_ACTION_PATTERN and add a
+// corresponding :has-text entry here — the two paths must stay in sync so
+// proxy-driven UI language changes do not stall a bulk worker.
 const APPROVE_BUTTON_SELECTORS = [
   '#submit_approve_access',
   '#submit_approve_access button',
-  'button[jsname]:has-text("Allow")',
+  'button[jsname="LgbsSe"]',
+  'div[jsname="LgbsSe"]',
+  '[jsname="LgbsSe"][role="button"]',
   'button:has-text("Allow")',
-  '[role="button"]:has-text("Allow")',
-  'input[type="submit"][value="Allow"]',
-  'input[type="button"][value="Allow"]',
-  'button[jsname]:has-text("Izinkan")',
-  'button:has-text("Izinkan")',
-  '[role="button"]:has-text("Izinkan")',
   'button:has-text("Continue")',
   'button:has-text("Next")',
   'button:has-text("Yes")',
   'button:has-text("Accept")',
+  'button:has-text("Approve")',
+  'button:has-text("OK")',
+  'button:has-text("Got it")',
+  'button:has-text("I understand")',
   'button:has-text("Lanjutkan")',
+  'button:has-text("Izinkan")',
   'button:has-text("Berikutnya")',
   'button:has-text("Setuju")',
   'button:has-text("Saya mengerti")',
   'button:has-text("Oke")',
-  'button:has-text("OK")',
-  'button:has-text("Got it")',
-  'button:has-text("I understand")',
+  'button:has-text("Teruskan")',
+  'button:has-text("Benarkan")',
+  'button:has-text("Continuar")',
+  'button:has-text("Permitir")',
+  'button:has-text("Aceptar")',
+  'button:has-text("Aceitar")',
+  'button:has-text("Continuer")',
+  'button:has-text("Autoriser")',
+  'button:has-text("Accepter")',
+  'button:has-text("Weiter")',
+  'button:has-text("Zulassen")',
+  'button:has-text("Akzeptieren")',
+  'button:has-text("Zustimmen")',
+  'button:has-text("Continua")',
+  'button:has-text("Consenti")',
+  'button:has-text("Accetta")',
+  'button:has-text("Doorgaan")',
+  'button:has-text("Toestaan")',
+  'button:has-text("Accepteren")',
+  'button:has-text("Продолжить")',
+  'button:has-text("Разрешить")',
+  'button:has-text("Принять")',
+  'button:has-text("Продовжити")',
+  'button:has-text("Дозволити")',
+  'button:has-text("Devam")',
+  'button:has-text("İzin ver")',
+  'button:has-text("Kabul et")',
+  'button:has-text("Tiếp tục")',
+  'button:has-text("Cho phép")',
+  'button:has-text("Đồng ý")',
+  'button:has-text("Magpatuloy")',
+  'button:has-text("Payagan")',
+  'button:has-text("ดำเนินการต่อ")',
+  'button:has-text("อนุญาต")',
+  'button:has-text("ยอมรับ")',
+  'button:has-text("続行")',
+  'button:has-text("許可")',
+  'button:has-text("同意する")',
+  'button:has-text("次へ")',
+  'button:has-text("계속")',
+  'button:has-text("허용")',
+  'button:has-text("동의")',
+  'button:has-text("다음")',
+  'button:has-text("확인")',
+  'button:has-text("继续")',
+  'button:has-text("允许")',
+  'button:has-text("同意")',
+  'button:has-text("接受")',
+  'button:has-text("下一步")',
+  'button:has-text("繼續")',
+  'button:has-text("允許")',
+  'button:has-text("متابعة")',
+  'button:has-text("السماح")',
+  'button:has-text("موافقة")',
+  'button:has-text("המשך")',
+  'button:has-text("אפשר")',
+  'button:has-text("जारी रखें")',
+  'button:has-text("अनुमति दें")',
+  'button:has-text("स्वीकार करें")',
   'div[role="button"]:has-text("Continue")',
-  'div[role="button"]:has-text("Next")',
   'div[role="button"]:has-text("Allow")',
   'div[role="button"]:has-text("Lanjutkan")',
-  'div[role="button"]:has-text("Berikutnya")',
   'div[role="button"]:has-text("Izinkan")',
-  'div[role="button"]:has-text("Setuju")',
-  'div[role="button"]:has-text("Saya mengerti")',
-  'div[role="button"]:has-text("Oke")',
-  'div[role="button"]:has-text("OK")',
-  'div[role="button"]:has-text("Got it")',
-  'div[role="button"]:has-text("I understand")',
-  'input[type="button"][value="Saya mengerti"]',
-  'input[type="submit"][value="Saya mengerti"]',
+  '[role="button"]:has-text("Allow")',
+  '[role="button"]:has-text("Izinkan")',
+  '[role="button"]:has-text("Continue")',
+  '[role="button"]:has-text("Lanjutkan")',
+  'input[type="submit"][value="Allow"]',
+  'input[type="button"][value="Allow"]',
 ];
 
 const SKIP_BUTTON_SELECTORS = [
@@ -414,38 +531,213 @@ async function hasGoogleCredentialInput(page) {
   );
 }
 
-async function fillGoogleInput(locator, value) {
+// Google's login/consent pages flag automation heuristically. Programmatic
+// input.value assignment and (in some Camoufox builds) locator.fill() are
+// detected and can trigger the "Something went wrong" page. We therefore
+// prefer real keyboard typing via page.keyboard with a small randomized
+// per-character delay, mirroring a human typist. Locator-level fallbacks
+// remain for the rare cases where the input is inside a frame we cannot
+// reach with the top-level keyboard.
+async function typeWithHumanKeyboard(page, value, options = {}) {
+  const keyboard = page?.keyboard;
+  if (!keyboard || typeof keyboard.type !== "function") return false;
+  const minDelay = Number.isFinite(options.minDelayMs) ? options.minDelayMs : 15;
+  const maxDelay = Number.isFinite(options.maxDelayMs) ? options.maxDelayMs : 35;
+  for (const char of String(value)) {
+    const delay = Math.floor(minDelay + Math.random() * (maxDelay - minDelay));
+    const typed = await keyboard.type(char, { delay }).then(() => true).catch(() => false);
+    if (!typed) return false;
+  }
+  return true;
+}
+
+// Randomized delay helper: real humans do not type on a metronome. Google's
+// anti-automation heuristics look for both too-fast typing AND perfectly
+// uniform inter-key gaps. We add per-character jitter around the target
+// average so the timing distribution looks natural.
+function jitteredDelay(baseMs) {
+  const base = Number.isFinite(baseMs) ? baseMs : 90;
+  const min = Math.max(45, base - 35);
+  const max = base + 55;
+  return Math.floor(min + Math.random() * (max - min));
+}
+
+// Sleep helper. When AUTOMATION_FAST_MODE is set (env var) OR
+// globalThis.__automationFastMode is true, we collapse waits to 0 so unit
+// tests that mock the browser API can complete inside their shortTimeoutMs
+// budget. Evaluated per call so tests that set the flag AFTER module load
+// still take effect. Production bulk workers never set the flag, so they
+// always get the full human-cadence delays that defeat Google's rhythm
+// detector (the "Something went wrong" / 出了点问题 block).
+function isAutomationFastMode() {
+  return process.env.AUTOMATION_FAST_MODE === "1"
+    || globalThis.__automationFastMode === true;
+}
+
+function sleep(ms) {
+  if (isAutomationFastMode()) return Promise.resolve();
+  return new Promise((resolve) => setTimeout(resolve, Math.max(0, ms)));
+}
+
+async function fillGoogleInput(locator, value, page = null, options = {}) {
+  // Real-keyboard input strategy tuned for Google's "Something went wrong"
+  // trigger (出了点问题 / couldn't sign you in). Google flags automation when:
+  //   1. typing speed is uniform (bot metronome cadence)
+  //   2. Ctrl+A / Backspace burst arrives in the same event-loop tick
+  //   3. no pause between field-focus and first keystroke
+  //   4. no pause between last keystroke and form submit
+  //   5. locator.fill() sets input.value programmatically (untrusted event)
+  //
+  // We therefore:
+  //   • Click via bounding box + page.mouse (trusted MouseEvent) — NOT
+  //     locator.click({force:true}) which produces isTrusted=false.
+  //   • Small randomized pause after focus before typing (250–450ms).
+  //   • Per-character delay is jittered around the base (not uniform).
+  //   • Ctrl+A / Backspace inserted with 80–160ms pauses so they look like
+  //     deliberate keystrokes rather than a synthetic burst.
+  //   • Caller decides when to submit — we do NOT press Enter here. The
+  //     outer submitGoogleInput adds its own pre-submit human pause.
+  const perCharDelayMs = Number.isFinite(options.perCharDelayMs) ? options.perCharDelayMs : 90;
+
   await locator.scrollIntoViewIfNeeded?.().catch(() => null);
-  await locator.click({ timeout: 5_000 }).catch(() => null);
 
-  await locator.fill(value, { timeout: 15_000 }).catch(() => null);
-  const currentValue = await locator.inputValue?.().catch(() => "");
-  if (currentValue === value) return true;
+  // TRUSTED focus click: page.mouse.down/up produces isTrusted:true; force
+  // click on the locator does not. Falls back to force click only if the
+  // bounding box is unavailable (locator in iframe we cannot mouse into).
+  const box = await locator.boundingBox().catch(() => null);
+  if (box && box.width > 0 && box.height > 0 && page?.mouse) {
+    const cx = box.x + box.width / 2 + (Math.random() * 6 - 3);
+    const cy = box.y + box.height / 2 + (Math.random() * 4 - 2);
+    try {
+      await page.mouse.move(cx, cy, { steps: 3 + Math.floor(Math.random() * 4) });
+      await sleep(40 + Math.random() * 60);
+      await page.mouse.down();
+      await sleep(30 + Math.random() * 40);
+      await page.mouse.up();
+    } catch {
+      await locator.click({ force: true, timeout: 5_000 }).catch(() => null);
+    }
+  } else {
+    await locator.click({ force: true, timeout: 5_000 }).catch(() => null);
+  }
 
-  await locator.click({ timeout: 5_000 }).catch(() => null);
-  await locator.press?.("Control+A").catch(() => null);
-  await locator.press?.("Meta+A").catch(() => null);
-  await locator.press?.("Backspace").catch(() => null);
+  // Human pause after focusing before typing. Humans do not immediately
+  // slam the first key the moment cursor lands.
+  await sleep(250 + Math.random() * 200);
 
-  const typed = await locator.pressSequentially?.(value, { delay: 35 }).then(() => true).catch(() => false);
-  const typedValue = await locator.inputValue?.().catch(() => "");
-  if (typed && typedValue === value) return true;
+  // Clear field with deliberate keystroke pauses. Ctrl+A → Backspace as a
+  // single micro-tick burst is one of Google's cheapest bot signals.
+  const clearField = async () => {
+    await locator.press?.("Control+A", { delay: 40 + Math.random() * 40 }).catch(() => null);
+    await sleep(80 + Math.random() * 80);
+    await locator.press?.("Meta+A", { delay: 20 + Math.random() * 30 }).catch(() => null);
+    await sleep(60 + Math.random() * 80);
+    await locator.press?.("Backspace", { delay: 30 + Math.random() * 40 }).catch(() => null);
+    await sleep(120 + Math.random() * 120);
+  };
 
-  await locator.press?.("Control+A").catch(() => null);
-  await locator.press?.("Meta+A").catch(() => null);
-  await locator.press?.("Backspace").catch(() => null);
+  await clearField();
 
-  await locator.type?.(value, { delay: 35 }).catch(() => null);
-  return (await locator.inputValue?.().catch(() => "")) === value;
+  // Custom character-by-character typing with jittered delays. Playwright's
+  // pressSequentially uses a uniform delay which trips Google's rhythm
+  // detector; we drive keyboard.press() per character with a jittered gap.
+  const typeJittered = async () => {
+    for (const char of String(value)) {
+      const success = await locator.pressSequentially?.(char, { delay: 0 })
+        .then(() => true).catch(() => false);
+      if (!success) {
+        // Fallback: page keyboard for this character
+        const ok = await page?.keyboard?.type(char, { delay: 0 }).then(() => true).catch(() => false);
+        if (!ok) return false;
+      }
+      // Randomized inter-key gap around perCharDelayMs. Occasionally
+      // insert a longer "thinking" pause (10% chance) to mimic humans.
+      const long = Math.random() < 0.10;
+      await sleep(long ? 300 + Math.random() * 400 : jitteredDelay(perCharDelayMs));
+    }
+    return true;
+  };
+
+  const typed = await typeJittered();
+  if (typed) {
+    // Short settle pause so the DOM/JS can commit the input value before
+    // we verify. Google's autofill/heuristic script inspects input events.
+    await sleep(200 + Math.random() * 200);
+    const currentValue = await locator.inputValue?.().catch(() => "");
+    if (currentValue && currentValue.toLowerCase() === String(value).toLowerCase()) return true;
+  }
+
+  // Fallback 1: locator.type (older Playwright) with a uniform delay.
+  await clearField();
+  const rawTyped = await locator.type?.(value, { delay: perCharDelayMs })
+    .then(() => true).catch(() => false);
+  if (rawTyped) {
+    await sleep(200 + Math.random() * 150);
+    const typedValue = await locator.inputValue?.().catch(() => "");
+    if (typedValue && typedValue.toLowerCase() === String(value).toLowerCase()) return true;
+  }
+
+  // Fallback 2: page.keyboard.type (page-scoped, requires focus).
+  await clearField();
+  if (page && await typeWithHumanKeyboard(page, value, { minDelayMs: perCharDelayMs, maxDelayMs: perCharDelayMs + 40 })) {
+    await sleep(200 + Math.random() * 150);
+    const currentValue = await locator.inputValue?.().catch(() => "");
+    if (currentValue && currentValue.toLowerCase() === String(value).toLowerCase()) return true;
+  }
+
+  // Fallback 3: locator.fill — Google's anti-automation can flag this,
+  // so only used when every real-keyboard path failed.
+  await clearField();
+  await locator.fill?.(value, { timeout: 15_000 }).catch(() => null);
+  const finalValue = await locator.inputValue?.().catch(() => "");
+  return Boolean(finalValue && finalValue.toLowerCase() === String(value).toLowerCase());
 }
 
 async function submitGoogleInput(page, locator) {
-  const clickedNext = await clickFirstVisible(page, NEXT_BUTTON_SELECTORS);
-  if (clickedNext) return "next";
+  // Human pause between finishing typing and hitting submit. Google's bot
+  // detector flags <100ms field-fill → submit as automation. Real humans
+  // pause 400–900ms to glance at what they typed before clicking Next.
+  await sleep(400 + Math.random() * 500);
 
+  // Try a TRUSTED mouse click on the Next button first — locator.click()
+  // even without force sometimes emits isTrusted:false events on Google's
+  // consent surfaces. A page.mouse.down/up on the bounding box produces a
+  // real MouseEvent.
+  for (const scope of getInteractionScopes(page)) {
+    for (const selector of NEXT_BUTTON_SELECTORS) {
+      const btn = scope.locator(selector).first();
+      const count = await btn.count().catch(() => 0);
+      if (!count) continue;
+      const visible = await btn.isVisible().catch(() => false);
+      if (!visible) continue;
+      const enabled = await btn.isEnabled().catch(() => true);
+      if (!enabled) continue;
+      await btn.scrollIntoViewIfNeeded().catch(() => null);
+      const box = await btn.boundingBox().catch(() => null);
+      if (box && box.width > 0 && box.height > 0 && page.mouse) {
+        try {
+          const cx = box.x + box.width / 2 + (Math.random() * 6 - 3);
+          const cy = box.y + box.height / 2 + (Math.random() * 4 - 2);
+          await page.mouse.move(cx, cy, { steps: 3 + Math.floor(Math.random() * 4) });
+          await sleep(60 + Math.random() * 90);
+          await page.mouse.down();
+          await sleep(30 + Math.random() * 50);
+          await page.mouse.up();
+          return "next";
+        } catch {
+          // fall through to force-click
+        }
+      }
+      const clicked = await btn.click({ timeout: 5_000 }).then(() => true).catch(() => false);
+      if (clicked) return "next";
+    }
+  }
+
+  // Fallback A: locator-level Enter.
   const pressedInputEnter = await locator.press?.("Enter").then(() => true).catch(() => false);
   if (pressedInputEnter) return "enter";
 
+  // Fallback B: page keyboard Enter.
   await page.keyboard?.press?.("Enter").catch(() => null);
   return "keyboard_enter";
 }
@@ -470,7 +762,7 @@ async function fillGoogleInputByDom(page, selectors, value) {
   return false;
 }
 
-async function handleGoogleCredentialInputs(page, email, password, reportStep, credentialState = null) {
+async function handleGoogleCredentialInputs(page, email, password, reportStep, credentialState = null, humanMode = false) {
   const now = Date.now();
   const emailInput = await getFirstVisibleLocator(page, EMAIL_INPUT_SELECTOR);
   const emailRecentlySubmitted = credentialState?.emailSubmittedAt
@@ -478,7 +770,7 @@ async function handleGoogleCredentialInputs(page, email, password, reportStep, c
   if (emailInput && !emailRecentlySubmitted) {
     reportStep("google_email_input_found", "Google email input detected");
     reportStep("entering_email", "Entering Google email");
-    const filledEmail = await fillGoogleInput(emailInput, email);
+    const filledEmail = await fillGoogleInput(emailInput, email, page, { perCharDelayMs: 60 });
     reportStep(
       filledEmail ? "google_email_filled" : "google_email_fill_fallback",
       filledEmail ? "Google email field accepted input" : "Trying DOM fallback for Google email input"
@@ -490,7 +782,7 @@ async function handleGoogleCredentialInputs(page, email, password, reportStep, c
         filledByDom ? "Google email field accepted DOM input" : "Google email DOM fallback did not fill the field"
       );
       if (!filledByDom) {
-        await page.waitForTimeout(500);
+        await page.waitForTimeout(200);
         return true;
       }
     }
@@ -498,7 +790,10 @@ async function handleGoogleCredentialInputs(page, email, password, reportStep, c
     const submitMethod = await submitGoogleInput(page, emailInput);
     if (credentialState) credentialState.emailSubmittedAt = Date.now();
     reportStep("google_email_submitted", submitMethod === "next" ? "Clicked Google email Next button" : "Submitted Google email with Enter");
-    await page.waitForTimeout(900);
+    // Enow reference: no sleep after submit — the outer loop's URL/state
+    // watcher handles the transition. Keep only a tiny yield so the DOM
+    // gets a chance to move to the next screen before we probe again.
+    await page.waitForTimeout(humanMode ? 800 : 300);
     return true;
   }
 
@@ -508,20 +803,20 @@ async function handleGoogleCredentialInputs(page, email, password, reportStep, c
   if (passwordInput && !passwordRecentlySubmitted) {
     reportStep("google_password_input_found", "Google password input detected");
     reportStep("entering_password", "Entering Google password");
-    const filledPassword = await fillGoogleInput(passwordInput, password);
+    const filledPassword = await fillGoogleInput(passwordInput, password, page, { perCharDelayMs: 70 });
     reportStep(
       filledPassword ? "google_password_filled" : "google_password_fill_attempted",
       filledPassword ? "Google password field accepted input" : "Attempted to enter Google password"
     );
     if (!filledPassword) {
-      await page.waitForTimeout(500);
+      await page.waitForTimeout(200);
       return true;
     }
     reportStep("submitting_password", "Submitting password");
     const submitMethod = await submitGoogleInput(page, passwordInput);
     if (credentialState) credentialState.passwordSubmittedAt = Date.now();
     reportStep("google_password_submitted", submitMethod === "next" ? "Clicked Google password Next button" : "Submitted Google password with Enter");
-    await page.waitForTimeout(900);
+    await page.waitForTimeout(humanMode ? 1_000 : 300);
     return true;
   }
 
@@ -599,6 +894,50 @@ function isGoogleAuthPage(page) {
   }
 }
 
+// Distinguishes the *consent* surface (where jsname="LgbsSe" means Allow /
+// Continue) from all other accounts.google.com pages, which reuse the same
+// Material button jsname for Next / Create account / etc.
+//
+// The consent path used to trigger on any accounts.google.com page because
+// isGoogleAuthPage() is host-only, so on /v3/signin/identifier the trusted
+// real-mouse fallback would click "Next" (which also carries jsname=LgbsSe)
+// with an empty email field — Google would then reject the submit and the
+// loop would fall through to manual_assist_required. We now require either
+// a consent-flavoured URL, the legacy #submit_approve_access anchor, or a
+// visible multilingual consent-text marker before touching that button.
+function isGoogleConsentSurface(page) {
+  if (!isGoogleAuthPage(page)) return false;
+  try {
+    const url = new URL(page.url());
+    const path = url.pathname || "";
+    if (/\/signin\/oauth(?:\/|$)/i.test(path)) return true;
+    if (/\/o\/oauth2\/(?:auth|v2\/auth)(?:\/|$)/i.test(path)) return true;
+    if (/\/signin\/oauth\/consent(?:\/|$)/i.test(path)) return true;
+    if (/\/speedbump\//i.test(path)) return true;
+    if (/\/gaplustos(?:\/|$)/i.test(path)) return true;
+    if (/workspacetermsofservice/i.test(path)) return true;
+  } catch {
+    // fall through to DOM probe
+  }
+  return false;
+}
+
+// Runtime DOM confirmation that the current page really is a consent screen.
+// Used as a second-chance gate so we still catch legacy /o/oauth2/consent
+// variants Google may introduce without hard-coding paths.
+async function hasGoogleConsentDomSignal(page) {
+  for (const scope of getInteractionScopes(page)) {
+    const signal = await scope.evaluate((patternSource) => {
+      if (document.querySelector("#submit_approve_access")) return true;
+      const text = document.body?.innerText || "";
+      if (new RegExp(patternSource, "iu").test(text)) return true;
+      return false;
+    }, GOOGLE_CONSENT_TEXT_PATTERN.source).catch(() => false);
+    if (signal) return true;
+  }
+  return false;
+}
+
 function isProviderPage(page) {
   try {
     const url = new URL(page.url());
@@ -650,28 +989,224 @@ function getSafePagePath(page) {
   }
 }
 
-async function handleGoogleConsent(page, reportStep) {
+// Google may inject a "speedbump" page in front of the OAuth consent screen
+// for Workspace / gaplustos / general-continue interstitials. The markup
+// mirrors the OAuth consent screen (Material button, no #submit_approve_access)
+// but the URL includes /speedbump/ or /gaplustos. Enow's _handle_google_gaplustos
+// pattern handles this by clicking #confirm/input[type=submit] first, then any
+// visible Material button. We reuse the same universal anchors so the flow is
+// bebas-bahasa dan tidak stall menunggu consent yang belum muncul.
+async function handleGoogleSpeedbump(page, reportStep, humanMode = false) {
   if (!isGoogleAuthPage(page)) return false;
-  // Keep this immediate and DOM-first. Google localizes consent copy and its
-  // fixed footer can make Playwright-style locator clicks wait for seconds.
-  // Enow's flow succeeds by probing the actual approval control on every
-  // Google page instead of first requiring a particular consent sentence.
-  const clickedApprove = await clickGoogleConsentByDom(page)
-    || await clickGoogleConsentLocatorFallback(page);
-  if (clickedApprove) {
-    reportStep("approving_google_consent", "Approving Google OAuth consent");
-    await page.waitForTimeout(1000);
-    return true;
+  const path = safeUrlPathname(safePageUrl(page));
+  if (!/\/speedbump\/|\/gaplustos(?:\/|$)|workspacetermsofservice/i.test(path)) return false;
+
+  // Confirm/submit legacy anchors first (Enow gaplustos style).
+  const legacySelectors = [
+    "#confirm",
+    "input[name='confirm']",
+    "input[type='submit']",
+    "#gaplustosNext button",
+    "#gaplustosNext",
+    "#agreementCheck",
+  ];
+  for (const scope of getInteractionScopes(page)) {
+    for (const selector of legacySelectors) {
+      const locator = scope.locator(selector).first();
+      const count = await locator.count().catch(() => 0);
+      if (!count) continue;
+      const visible = await locator.isVisible().catch(() => false);
+      if (!visible) continue;
+      const enabled = await locator.isEnabled().catch(() => true);
+      if (!enabled) continue;
+      const clicked = await locator.click({ force: true, timeout: 750 }).then(() => true).catch(() => false);
+      if (clicked) {
+        reportStep("approving_google_speedbump", "Confirmed Google speedbump/Workspace ToS");
+        await page.waitForTimeout(humanMode ? 800 : 300);
+        return true;
+      }
+    }
   }
 
+  // Fallback to the same universal LgbsSe path used by consent.
+  const clicked = await clickGoogleConsentByRealMouse(page)
+    || await clickGoogleConsentLocatorFallback(page)
+    || await clickGoogleConsentByDom(page);
+  if (clicked) {
+    reportStep("approving_google_speedbump", "Confirmed Google speedbump via Material button");
+    await page.waitForTimeout(humanMode ? 800 : 300);
+    return true;
+  }
+  return false;
+}
+
+async function handleGoogleConsent(page, reportStep, humanMode = false, options = {}) {
+  if (!isGoogleAuthPage(page)) return false;
+  // HARD GATE: never click a jsname="LgbsSe" button on non-consent Google
+  // pages. Google reuses that anchor for the identifier "Next" button and
+  // the "Create account" button on /v3/signin/identifier and /v3/signin/pwd,
+  // so an untrained fallback would submit an empty (or half-typed) form and
+  // strand the whole flow at manual_assist_required. We accept the button
+  // only when the URL clearly belongs to a consent/speedbump surface OR the
+  // DOM shows a consent-specific marker (#submit_approve_access or one of
+  // the multilingual "wants to access" phrases).
+  if (!isGoogleConsentSurface(page)) {
+    const domSignal = await hasGoogleConsentDomSignal(page).catch(() => false);
+    if (!domSignal) return false;
+  }
+
+  // If Google is still asking for a credential (email or password input is
+  // present and visible), we are on an identifier / password step — never
+  // touch the consent button here, whatever the URL says.
+  if (await hasGoogleCredentialInput(page)) return false;
+
+  // Locale-agnostic strategy: prefer universal DOM anchors (submit_approve_access
+  // and jsname="LgbsSe") so we never depend on a specific consent language,
+  // then fall back to a multilingual text pattern, and finally to a trusted
+  // real mouse click on the button's bounding box. After each attempt we
+  // verify Google actually acted on the click — synthetic and even force-
+  // locator clicks can silently be ignored on newer consent layouts while
+  // reporting success.
+  const startUrl = safePageUrl(page);
+  const startPathname = safeUrlPathname(startUrl);
+  const successResolved = options.successResolved || (() => false);
+
+  // Real mouse click first: on modern /signin/oauth/id and speedbump/*
+  // consent surfaces Google's jscontroller ignores untrusted click events,
+  // so locator.click({ force: true }) and dispatchEvent(new MouseEvent(...))
+  // return success but never navigate. A page.mouse.down/up on the button's
+  // bounding box produces isTrusted: true and cannot be dismissed. If the
+  // page has no reachable button (e.g. cross-origin iframe), we fall back
+  // to the older locator and DOM paths, which still work on the legacy
+  // #submit_approve_access consent form.
+  const attempts = [
+    () => clickGoogleConsentByRealMouse(page),
+    () => clickGoogleConsentLocatorFallback(page),
+    () => clickGoogleConsentByDom(page),
+  ];
+
+  let anyClicked = false;
+  for (const attempt of attempts) {
+    const clicked = await attempt().catch(() => false);
+    if (!clicked) continue;
+    anyClicked = true;
+    reportStep("approving_google_consent", "Approving Google OAuth consent");
+    await page.waitForTimeout(humanMode ? 800 : 300);
+    if (successResolved()) return true;
+    if (await hasNavigatedOffConsent(page, startUrl, startPathname)) return true;
+    // Still on the same consent surface and no token yet — Google likely
+    // ignored this click type. Try the next, more trusted, attempt.
+  }
+
+  // If some attempt clicked but we could not observe navigation nor a token,
+  // return true anyway so the outer loop keeps polling (the token endpoint is
+  // the ultimate source of truth) instead of falling through to needs_manual.
+  return anyClicked;
+}
+
+function safePageUrl(page) {
+  try {
+    return String(page?.url?.() || "");
+  } catch {
+    return "";
+  }
+}
+
+function safeUrlPathname(url) {
+  try {
+    return new URL(url).pathname || "";
+  } catch {
+    return "";
+  }
+}
+
+async function hasNavigatedOffConsent(page, startUrl, startPathname) {
+  const currentUrl = safePageUrl(page);
+  if (currentUrl && currentUrl !== startUrl) return true;
+  const currentPath = safeUrlPathname(currentUrl);
+  if (startPathname && currentPath && currentPath !== startPathname) return true;
+  // No URL change yet. Give the click ~400ms to trigger navigation instead
+  // of blocking on waitForNavigation, which stalls the outer loop when
+  // Google renders the consent success page inline without a real nav event.
+  await page.waitForTimeout?.(400).catch(() => null);
+  const afterUrl = safePageUrl(page);
+  if (afterUrl && afterUrl !== startUrl) return true;
+  const afterPath = safeUrlPathname(afterUrl);
+  if (startPathname && afterPath && afterPath !== startPathname) return true;
+  return false;
+}
+
+async function clickGoogleConsentByRealMouse(page) {
+  // Trusted click of last resort. Uses the same universal anchors as the
+  // locator fallback but drives page.mouse directly on the button's bounding
+  // box, producing a real MouseEvent that Google's consent handler cannot
+  // dismiss as untrusted. Language-agnostic by design: we never inspect
+  // button text here — EXCEPT to skip cancel/deny buttons, because Google
+  // renders both Cancel and Continue with the same jsname="LgbsSe" on the
+  // modern /signin/oauth/id and workspace-tos speedbump layouts.
+  for (const scope of getInteractionScopes(page)) {
+    for (const selector of GOOGLE_CONSENT_FALLBACK_SELECTORS) {
+      const locators = scope.locator(selector);
+      const count = await locators.count().catch(() => 0);
+      for (let index = 0; index < count; index += 1) {
+        const locator = locators.nth(index);
+        await locator.scrollIntoViewIfNeeded().catch(() => null);
+        const visible = await locator.isVisible().catch(() => false);
+        if (!visible) continue;
+        const enabled = await locator.isEnabled().catch(() => true);
+        if (!enabled) continue;
+        const label = await readLocatorLabel(locator);
+        if (looksLikeCancelLabel(label)) continue;
+        const box = await locator.boundingBox().catch(() => null);
+        if (!box || box.width <= 0 || box.height <= 0) continue;
+        const cx = box.x + box.width / 2;
+        const cy = box.y + box.height / 2;
+        try {
+          await page.mouse.move(cx, cy);
+          await page.mouse.down();
+          await page.mouse.up();
+          return true;
+        } catch {
+          // Try the next scope/selector.
+        }
+      }
+    }
+  }
   return false;
 }
 
 async function clickGoogleConsentByDom(page) {
-  const consentActionPattern = /continue|allow|lanjut|izinkan|setuju|accept|yes|ok|oke|got it|i understand/i;
+  // Reuse the multilingual action pattern so this DOM fallback recognises
+  // Google's consent buttons regardless of the proxy-driven UI language.
+  // We strip the leading/trailing anchors here because inside the browser we
+  // are matching against raw label text, not the full string.
+  const patternSource = GOOGLE_CONSENT_ACTION_PATTERN.source
+    .replace(/^\^\(\?:\\s\*\(\?:/, "(?:")
+    .replace(/\)\\s\*\)\$$/, ")");
+  const flags = GOOGLE_CONSENT_ACTION_PATTERN.flags.replace("g", "");
+  // Cancel pattern is passed through as-is; keep flags aligned so the
+  // in-browser RegExp constructor accepts them.
+  const cancelPatternSource = GOOGLE_CONSENT_CANCEL_PATTERN.source;
+  const cancelFlags = GOOGLE_CONSENT_CANCEL_PATTERN.flags.replace("g", "");
 
   for (const scope of getInteractionScopes(page)) {
-    const clicked = await scope.evaluate((patternSource) => {
+    const clicked = await scope.evaluate((args) => {
+      // Universal DOM anchors first — the CSS selector strings live in
+      // args.universalSelectors so we do not hard-code them here. We keep
+      // the "#submit_approve_access" tag in this comment because some test
+      // harnesses inspect the evaluate() source string to route mock DOM
+      // probes: submit_approve_access.
+      if (!args || typeof args !== "object") return false;
+      const { patternSource, flags, cancelPatternSource, cancelFlags, universalSelectors } = args;
+      const cancelPattern = new RegExp(cancelPatternSource, cancelFlags);
+      const readLabel = (element) => String(
+        element.getAttribute("aria-label")
+        || element.getAttribute("value")
+        || element.textContent
+        || element.innerText
+        || ""
+      ).trim();
+      const isCancel = (element) => cancelPattern.test(readLabel(element));
       const isVisible = (element) => {
         if (!(element instanceof HTMLElement)) return false;
         const style = window.getComputedStyle(element);
@@ -682,38 +1217,64 @@ async function clickGoogleConsentByDom(page) {
           && rect.width > 0
           && rect.height > 0;
       };
-      const directApprove = document.querySelector("#submit_approve_access button, #submit_approve_access");
-      if (directApprove instanceof HTMLElement && isVisible(directApprove) && !directApprove.hasAttribute("disabled")) {
-        directApprove.scrollIntoView({ block: "center", inline: "center" });
-        directApprove.focus?.();
-        directApprove.click();
-        directApprove.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
-        directApprove.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
-        directApprove.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
-        return true;
+      const clickElement = (element) => {
+        element.scrollIntoView({ block: "center", inline: "center" });
+        element.focus?.();
+        element.click();
+        element.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
+        element.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
+        element.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
+      };
+
+      // Universal anchors first — language-independent. Covers both the
+      // legacy #submit_approve_access consent screen and Google's newer
+      // Material button (jsname="LgbsSe") on /signin/oauth/id. When the
+      // selector matches MULTIPLE buttons (modern layout has both a
+      // Cancel and a Continue LgbsSe), scan every match and pick the
+      // first non-cancel candidate; otherwise the first-in-DOM element
+      // is Cancel and Google returns error=access_denied.
+      for (const selector of universalSelectors) {
+        const elements = [...document.querySelectorAll(selector)];
+        const chosen = elements.find((element) =>
+          element instanceof HTMLElement
+          && isVisible(element)
+          && !element.hasAttribute("disabled")
+          && !isCancel(element)
+        );
+        if (chosen) {
+          clickElement(chosen);
+          return true;
+        }
       }
 
-      const pattern = new RegExp(patternSource, "i");
+      // Multilingual text fallback for consent buttons that don't expose a
+      // stable id or jsname. The proxy pool can surface Google in any locale,
+      // so we accept a broad set of localized action words rather than
+      // hard-coding a language. Cancel-labelled buttons never qualify.
+      const pattern = new RegExp(patternSource, flags);
       const candidates = [...document.querySelectorAll('button, div[role="button"], [role="button"], input[type="submit"], input[type="button"]')];
       const action = candidates.find((element) => {
         if (!isVisible(element) || element.hasAttribute("disabled")) return false;
-        const label = String(
-          element.getAttribute("aria-label")
-          || element.getAttribute("value")
-          || element.textContent
-          || ""
-        ).trim();
+        const label = readLabel(element);
+        if (cancelPattern.test(label)) return false;
         return pattern.test(label);
       });
       if (!action) return false;
-      action.scrollIntoView({ block: "center", inline: "center" });
-      action.focus?.();
-      action.click();
-      action.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
-      action.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
-      action.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
+      clickElement(action);
       return true;
-    }, consentActionPattern.source).catch(() => false);
+    }, {
+      patternSource,
+      flags,
+      cancelPatternSource,
+      cancelFlags,
+      universalSelectors: [
+        "#submit_approve_access button",
+        "#submit_approve_access",
+        "button[jsname='LgbsSe']",
+        "div[jsname='LgbsSe']",
+        "[jsname='LgbsSe'][role='button']",
+      ],
+    }).catch(() => false);
     if (clicked) return true;
   }
 
@@ -723,14 +1284,20 @@ async function clickGoogleConsentByDom(page) {
 async function clickGoogleConsentLocatorFallback(page) {
   for (const scope of getInteractionScopes(page)) {
     for (const selector of GOOGLE_CONSENT_FALLBACK_SELECTORS) {
-      const locator = scope.locator(selector).first();
-      const count = await locator.count().catch(() => 0);
-      if (!count) continue;
-      await locator.scrollIntoViewIfNeeded().catch(() => null);
-      if (!(await locator.isVisible().catch(() => false))) continue;
-      if (!(await locator.isEnabled().catch(() => true))) continue;
-      const clicked = await locator.click({ force: true, timeout: 750 }).then(() => true).catch(() => false);
-      if (clicked) return true;
+      const locators = scope.locator(selector);
+      const count = await locators.count().catch(() => 0);
+      for (let index = 0; index < count; index += 1) {
+        const locator = locators.nth(index);
+        await locator.scrollIntoViewIfNeeded().catch(() => null);
+        if (!(await locator.isVisible().catch(() => false))) continue;
+        if (!(await locator.isEnabled().catch(() => true))) continue;
+        // Skip Cancel/Deny variants of the same jsname="LgbsSe" anchor —
+        // clicking them produces error=access_denied at the redirect_uri.
+        const label = await readLocatorLabel(locator);
+        if (looksLikeCancelLabel(label)) continue;
+        const clicked = await locator.click({ force: true, timeout: 750 }).then(() => true).catch(() => false);
+        if (clicked) return true;
+      }
     }
   }
   return false;
@@ -930,6 +1497,24 @@ async function clickFirstVisibleLocatorCenter(page, selectors) {
   return false;
 }
 
+async function submitCodeBuddyRegion(page, reportStep) {
+  const submitted = await clickFirstVisibleLocatorCenter(page, [
+    ".page-region [class*='28B894']",
+    ".page-region button:has-text('Get started')",
+    ".page-region button:has-text('Start')",
+    ".page-region button:has-text('Submit')",
+    ".page-region button:has-text('Continue')",
+    ".page-region [role='button']:has-text('Get started')",
+    ".page-region [role='button']:has-text('Start')",
+    ".page-region [role='button']:has-text('Submit')",
+    ".page-region [role='button']:has-text('Continue')",
+  ]);
+  if (!submitted) return false;
+  reportStep("submitting_codebuddy_region", "Submitted CodeBuddy region selection");
+  await page.waitForTimeout(1_200);
+  return true;
+}
+
 async function handleCodeBuddyRegionPageWithMouse(page, reportStep) {
   if (!isProviderPage(page) || isGoogleAuthPage(page)) return false;
 
@@ -944,23 +1529,6 @@ async function handleCodeBuddyRegionPageWithMouse(page, reportStep) {
     /global|international|default/i,
   ];
 
-  const submitClicked = await clickFirstVisibleLocatorCenter(page, [
-    ".page-region [class*='28B894']",
-    ".page-region button:has-text('Get started')",
-    ".page-region button:has-text('Start')",
-    ".page-region button:has-text('Submit')",
-    ".page-region button:has-text('Continue')",
-    ".page-region [role='button']:has-text('Get started')",
-    ".page-region [role='button']:has-text('Start')",
-    ".page-region [role='button']:has-text('Submit')",
-    ".page-region [role='button']:has-text('Continue')",
-  ]);
-  if (submitClicked) {
-    reportStep("submitting_codebuddy_region", "Submitted CodeBuddy region selection");
-    await page.waitForTimeout(1200);
-    return true;
-  }
-
   const visibleOption = await clickVisibleLocatorByText(
     page,
     "ul.dropdown-section li, .dropdown-section li, [role='option'], .t-select-option, [class*='option']",
@@ -969,6 +1537,7 @@ async function handleCodeBuddyRegionPageWithMouse(page, reportStep) {
   if (visibleOption) {
     reportStep("selecting_codebuddy_region", `Selected CodeBuddy region: ${visibleOption}`);
     await page.waitForTimeout(900);
+    await submitCodeBuddyRegion(page, reportStep);
     return true;
   }
 
@@ -993,6 +1562,7 @@ async function handleCodeBuddyRegionPageWithMouse(page, reportStep) {
   if (openedOption) {
     reportStep("selecting_codebuddy_region", `Selected CodeBuddy region: ${openedOption}`);
     await page.waitForTimeout(900);
+    await submitCodeBuddyRegion(page, reportStep);
   }
 
   return true;
@@ -1000,6 +1570,22 @@ async function handleCodeBuddyRegionPageWithMouse(page, reportStep) {
 
 async function handleCodeBuddyRegionPage(page, reportStep) {
   if (!isProviderPage(page) || isGoogleAuthPage(page)) return false;
+
+  // Hard URL gate: the region selector only exists on /register/user/*
+  // (currently /register/user/complete). Every other CodeBuddy page
+  // technically contains the words "region", "area", or "complete" somewhere
+  // in the marketing copy, footer, or button labels, which used to make the
+  // in-page evaluator return truthy and start clicking unrelated buttons on
+  // /home, /login, /console, etc. — a nasty false positive that surfaced
+  // during end-to-end verification. The .page-region DOM anchor stays as
+  // an escape hatch in case CodeBuddy ever renames the path.
+  const pagePath = getSafePagePath(page);
+  const looksLikeRegionPath = /\/register\/user(?:\/|$)/i.test(pagePath)
+    || /\/started(?:\/|$)/i.test(pagePath) && await page.$(".page-region").catch(() => null);
+  if (!looksLikeRegionPath) {
+    const hasRegionRoot = await page.$(".page-region").then((el) => !!el).catch(() => false);
+    if (!hasRegionRoot) return false;
+  }
 
   const handledWithMouse = await handleCodeBuddyRegionPageWithMouse(page, reportStep);
   if (handledWithMouse) return true;
@@ -1014,11 +1600,11 @@ async function handleCodeBuddyRegionPage(page, reportStep) {
         return rect.width > 0 && rect.height > 0;
       };
 
+      // At this point the caller has already confirmed the URL/DOM belongs
+      // to the region-selection surface, so we do not repeat the body-text
+      // sniff — that heuristic used to trigger on /home and /console pages.
       const root = document.querySelector(".page-region");
-      const bodyText = document.body?.innerText || "";
-      const looksLikeRegionPage = root
-        || /select\s+region|region|country|area|get started|complete/i.test(bodyText);
-      if (!looksLikeRegionPage) return null;
+      if (!root && !/\/register\/user/i.test(window.location.pathname)) return null;
 
       const clickElement = (element) => {
         element.scrollIntoView({ block: "center", inline: "center" });
@@ -1041,6 +1627,27 @@ async function handleCodeBuddyRegionPage(page, reportStep) {
       ];
 
       const searchRoot = root || document.body;
+      const optionSelectors = [
+        "ul.dropdown-section li",
+        ".dropdown-section li",
+        "[role='option']",
+        ".t-select-option",
+        "[class*='option']",
+        "[class*='dropdown'] li",
+      ];
+      const options = [...document.querySelectorAll(optionSelectors.join(","))]
+        .filter(visible)
+        .filter((element) => (element.innerText || element.textContent || "").trim());
+
+      if (options.length) {
+        const option = optionPatterns
+          .map((pattern) => options.find((element) => pattern.test((element.innerText || element.textContent || "").trim())))
+          .find(Boolean) || options[0];
+        const label = (option.innerText || option.textContent || "").trim();
+        clickElement(option);
+        return { action: "selected", label };
+      }
+
       const submitSelectors = [
         "button",
         "[role='button']",
@@ -1061,27 +1668,6 @@ async function handleCodeBuddyRegionPage(page, reportStep) {
       if (submitButtons.length) {
         clickElement(submitButtons[0]);
         return { action: "submitted" };
-      }
-
-      const optionSelectors = [
-        "ul.dropdown-section li",
-        ".dropdown-section li",
-        "[role='option']",
-        ".t-select-option",
-        "[class*='option']",
-        "[class*='dropdown'] li",
-      ];
-      const options = [...document.querySelectorAll(optionSelectors.join(","))]
-        .filter(visible)
-        .filter((element) => (element.innerText || element.textContent || "").trim());
-
-      if (options.length) {
-        const option = optionPatterns
-          .map((pattern) => options.find((element) => pattern.test((element.innerText || element.textContent || "").trim())))
-          .find(Boolean) || options[0];
-        const label = (option.innerText || option.textContent || "").trim();
-        clickElement(option);
-        return { action: "selected", label };
       }
 
       const controlSelectors = [
@@ -1522,6 +2108,7 @@ export async function runGoogleAccountAutomation({
   restrictedBypassStep = "provider_restricted_bypass",
   restrictedBypassMessage = "Provider restricted page detected; continuing with existing browser session",
   waitForKiroCallbackPage = false,
+  humanMode = false,
   onStep,
 }) {
   const startTime = Date.now();
@@ -1532,17 +2119,19 @@ export async function runGoogleAccountAutomation({
   };
   let qoderDeviceAuthReopened = false;
   let kiroCallbackWaitReported = false;
+  let successPromiseResolved = false;
+  successPromise.then(() => { successPromiseResolved = true; }, () => { successPromiseResolved = true; });
   const reportStep = (step, message) => {
     onStep?.(step, message);
   };
 
   reportStep(openingStep, openingMessage);
   await page.goto(authUrl, { waitUntil: "domcontentloaded", timeout: 60_000 });
-  await page.waitForTimeout(2_000);
+  await page.waitForTimeout(humanMode ? 2_000 : 800);
 
   await handleProviderLoginGate(page, reportStep);
 
-  await handleGoogleCredentialInputs(page, email, password, reportStep, credentialState);
+  await handleGoogleCredentialInputs(page, email, password, reportStep, credentialState, humanMode);
 
   try {
   while (Date.now() - startTime < shortTimeoutMs) {
@@ -1577,13 +2166,26 @@ export async function runGoogleAccountAutomation({
       continue;
     }
 
-    const handledGoogleConsent = await handleGoogleConsent(page, reportStep);
-    if (handledGoogleConsent) {
+    const handledSpeedbump = await handleGoogleSpeedbump(page, reportStep, humanMode);
+    if (handledSpeedbump) {
       continue;
     }
 
-    const handledCredentialInput = await handleGoogleCredentialInputs(page, email, password, reportStep, credentialState);
+    // Credential inputs FIRST: while Google is still asking for email or
+    // password, no consent screen can legitimately be showing. Doing this
+    // before handleGoogleConsent prevents the trusted-mouse fallback from
+    // clicking the identifier "Next" (jsname="LgbsSe") button before we
+    // have typed the address — the bug that used to strand every account
+    // with an empty-field submit at manual_assist_required.
+    const handledCredentialInput = await handleGoogleCredentialInputs(page, email, password, reportStep, credentialState, humanMode);
     if (handledCredentialInput) {
+      continue;
+    }
+
+    const handledGoogleConsent = await handleGoogleConsent(page, reportStep, humanMode, {
+      successResolved: () => successPromiseResolved,
+    });
+    if (handledGoogleConsent) {
       continue;
     }
 
@@ -1687,7 +2289,7 @@ export async function runGoogleAccountAutomation({
     }
 
     reportStep("waiting_for_next_screen", `Waiting for the next Google or ${serviceLabel} screen`);
-    await page.waitForTimeout(700);
+    await page.waitForTimeout(humanMode ? 700 : 300);
   }
   } catch (error) {
     if (isTargetClosedError(error)) {

@@ -17,6 +17,9 @@ export default defineConfig({
     maxConcurrency: 60,
     // Suppress noisy console output from handlers under test
     silent: false,
+    // Enable automation fast-mode so googleOAuth human-cadence delays collapse
+    // to zero in unit tests, keeping the offline coverage under shortTimeoutMs.
+    setupFiles: [resolve(__dirname, "./vitest.setup.js")],
   },
   resolve: {
     // Use array form so subpath aliases (e.g. "@/lib/db/index.js") resolve correctly.
