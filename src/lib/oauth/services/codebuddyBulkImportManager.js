@@ -22,6 +22,7 @@ import {
   handleCodeBuddyStartedAuthorization,
   isProviderPage,
 } from "./automation/googleOAuth.js";
+import { proxyAwareFetch } from "open-sse/utils/proxyFetch.js";
 
 const CODEBUDDY_PROVIDER_ID = "codebuddy";
 const CODEBUDDY_LABEL = "CodeBuddy";
@@ -32,6 +33,7 @@ const CODEBUDDY_COOKIE_DOMAINS = new Set(["codebuddy.ai", "www.codebuddy.ai"]);
 const CODEBUDDY_BASE_URL = "https://www.codebuddy.ai";
 const CODEBUDDY_CONSOLE_LOGIN_ACCOUNT_ENDPOINT = `${CODEBUDDY_BASE_URL}/console/login/account`;
 const CODEBUDDY_CONSOLE_ACCOUNTS_ENDPOINT = `${CODEBUDDY_BASE_URL}/console/accounts`;
+const CODEBUDDY_PLUGIN_ACCOUNTS_ENDPOINT = `${CODEBUDDY_BASE_URL}/v2/plugin/accounts`;
 const CODEBUDDY_API_KEYS_ENDPOINT = `${CODEBUDDY_BASE_URL}/console/api/client/v1/api-keys`;
 const CODEBUDDY_TRIAL_ENDPOINT = `${CODEBUDDY_BASE_URL}/billing/ide/trial`;
 const CODEBUDDY_DEFAULT_USER_ENTERPRISE_ID = "personal-edition-user-id";
@@ -210,6 +212,159 @@ async function codeBuddyRequestViaPage(page, method, url, body = null) {
   };
 }
 
+async function readCodeBuddyResponseBody(response) {
+  const text = await response.text().catch(() => "");
+  let json = null;
+  try { json = text ? JSON.parse(text) : null; } catch { json = null; }
+  return { text, json };
+}
+
+function summarizeCodeBuddyResponse(value) {
+  return String(value || "")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 160) || "unknown response";
+}
+
+function getCodeBuddyDomain(providerSpecificData = {}) {
+  return String(providerSpecificData.domain || providerSpecificData.rawAuth?.domain || "www.codebuddy.ai").trim() || "www.codebuddy.ai";
+}
+
+function getCodeBuddyAccessToken(tokens = {}) {
+  const providerSpecificData = tokens.providerSpecificData || {};
+  return String(
+    tokens.accessToken
+    || tokens.access_token
+    || providerSpecificData.accessToken
+    || providerSpecificData.access_token
+    || providerSpecificData.rawAuth?.accessToken
+    || providerSpecificData.rawAuth?.access_token
+    || ""
+  ).trim();
+}
+
+function buildCodeBuddyBearerHeaders({ accessToken, providerSpecificData = {}, uid = null, enterpriseId = null, extraHeaders = {} }) {
+  const domain = getCodeBuddyDomain(providerSpecificData);
+  const headers = {
+    Accept: "application/json, text/plain, */*",
+    "Accept-Language": "zh-CN,zh;q=0.9",
+    "User-Agent": "Mozilla/5.0",
+    "X-Requested-With": "XMLHttpRequest",
+    "X-Domain": domain,
+    Authorization: `Bearer ${accessToken}`,
+    Origin: `https://${domain}`,
+    Referer: `https://${domain}/console/api-key`,
+    ...extraHeaders,
+  };
+
+  if (uid) headers["X-User-Id"] = uid;
+  if (enterpriseId) {
+    headers["X-Enterprise-Id"] = enterpriseId;
+    headers["X-Tenant-Id"] = enterpriseId;
+  }
+
+  return headers;
+}
+
+async function fetchCodeBuddyBackendIdentity({ accessToken, providerSpecificData = {}, fetchImpl = proxyAwareFetch, proxyOptions = null } = {}) {
+  const domain = getCodeBuddyDomain(providerSpecificData);
+  const fromMeta = {
+    uid: String(providerSpecificData.uid || providerSpecificData.userId || providerSpecificData.codeBuddyUserId || "").trim(),
+    enterpriseId: String(providerSpecificData.enterpriseId || providerSpecificData.userEnterpriseId || "").trim(),
+    userEnterpriseId: String(providerSpecificData.userEnterpriseId || providerSpecificData.enterpriseId || "").trim(),
+  };
+
+  try {
+    const response = await fetchImpl(
+      domain === "www.codebuddy.ai" ? CODEBUDDY_PLUGIN_ACCOUNTS_ENDPOINT : `https://${domain}/v2/plugin/accounts`,
+      {
+        method: "GET",
+        headers: buildCodeBuddyBearerHeaders({ accessToken, providerSpecificData }),
+      },
+      proxyOptions
+    );
+    const { json } = await readCodeBuddyResponseBody(response);
+    const accounts = json?.data?.accounts || [];
+    if (response.ok && Array.isArray(accounts) && accounts.length) {
+      const account = accounts.find((entry) => entry?.lastLogin) || accounts[0] || {};
+      return {
+        uid: String(account.uid || fromMeta.uid || "").trim(),
+        enterpriseId: String(account.enterpriseId || fromMeta.enterpriseId || "").trim(),
+        userEnterpriseId: String(account.userEnterpriseId || account.user_enterprise_id || account.enterpriseId || fromMeta.userEnterpriseId || "").trim(),
+      };
+    }
+  } catch {
+    // Best effort; metadata/defaults below are enough for personal accounts.
+  }
+
+  return fromMeta;
+}
+
+async function createCodeBuddyApiKeyViaBackend({ accessToken, providerSpecificData = {}, userEnterpriseId = null, fetchImpl = proxyAwareFetch, proxyOptions = null } = {}) {
+  const token = String(accessToken || "").trim();
+  if (!token) {
+    return { apiKey: null, error: "CodeBuddy OAuth token is not available for backend API key creation" };
+  }
+
+  const domain = getCodeBuddyDomain(providerSpecificData);
+  const identity = await fetchCodeBuddyBackendIdentity({ accessToken: token, providerSpecificData, fetchImpl, proxyOptions });
+  const enterpriseId = String(
+    userEnterpriseId
+    || identity.userEnterpriseId
+    || identity.enterpriseId
+    || CODEBUDDY_DEFAULT_USER_ENTERPRISE_ID
+  ).trim();
+
+  try {
+    const response = await fetchImpl(
+      `https://${domain}/console/api/client/v1/api-keys`,
+      {
+        method: "POST",
+        headers: buildCodeBuddyBearerHeaders({
+          accessToken: token,
+          providerSpecificData,
+          uid: identity.uid,
+          enterpriseId,
+          extraHeaders: { "Content-Type": "application/json" },
+        }),
+        body: JSON.stringify({
+          name: createCodeBuddyApiKeyName(),
+          expire_in_days: -1,
+          user_enterprise_id: enterpriseId,
+        }),
+      },
+      proxyOptions
+    );
+    const { text, json } = await readCodeBuddyResponseBody(response);
+    if (!response.ok || json?.code !== 0) {
+      const code = json?.code ?? response.status;
+      const message = json?.msg || json?.message || text;
+      return {
+        apiKey: null,
+        identity: { ...identity, userEnterpriseId: enterpriseId },
+        error: `CodeBuddy bearer API key creation failed (${code}): ${summarizeCodeBuddyResponse(message)}`,
+      };
+    }
+
+    const apiKey = String(json?.data?.key || json?.data?.api_key || json?.data?.token || "").trim();
+    if (!apiKey) {
+      return {
+        apiKey: null,
+        identity: { ...identity, userEnterpriseId: enterpriseId },
+        error: "CodeBuddy bearer API key response did not include data.key",
+      };
+    }
+
+    return { apiKey, identity: { ...identity, userEnterpriseId: enterpriseId } };
+  } catch (error) {
+    return {
+      apiKey: null,
+      identity: { ...identity, userEnterpriseId: enterpriseId },
+      error: error.message || "CodeBuddy bearer API key creation failed",
+    };
+  }
+}
 function getCodeBuddyAccountIdentity(accountsPayload) {
   const accounts = accountsPayload?.data?.accounts;
   const firstAccount = Array.isArray(accounts) ? accounts[0] : null;
@@ -251,7 +406,7 @@ async function createCodeBuddyApiKeyViaPage(page, userEnterpriseId = CODEBUDDY_D
   if (result.status !== 200 || result.payload?.code !== 0) {
     const code = result.payload?.code ?? result.status;
     const message = result.payload?.msg || result.payload?.message || result.bodyText || "unknown response";
-    throw new Error(`CodeBuddy API key creation failed (${code}): ${String(message).slice(0, 160)}`);
+    throw new Error(`CodeBuddy API key creation failed (${code}): ${summarizeCodeBuddyResponse(message)}`);
   }
 
   const apiKey = String(result.payload?.data?.key || "").trim();
@@ -261,12 +416,44 @@ async function createCodeBuddyApiKeyViaPage(page, userEnterpriseId = CODEBUDDY_D
   return apiKey;
 }
 
-async function defaultCreateCodeBuddyApiKeyTokens({ page, tokens = {}, onStep }) {
+async function defaultCreateCodeBuddyApiKeyTokens({ page, tokens = {}, onStep, fetchImpl = proxyAwareFetch, proxyOptions = null }) {
   onStep?.("preparing_codebuddy_backend_session", "Preparing CodeBuddy backend session");
   const identity = await prepareCodeBuddyBackendSession(page);
 
   onStep?.("creating_codebuddy_api_key", "Creating CodeBuddy API key");
-  const apiKey = await createCodeBuddyApiKeyViaPage(page, identity.userEnterpriseId);
+  let apiKey = null;
+  let apiKeySource = "browser_backend";
+  let resolvedIdentity = identity;
+
+  try {
+    apiKey = await createCodeBuddyApiKeyViaPage(page, identity.userEnterpriseId);
+  } catch (browserError) {
+    const accessToken = getCodeBuddyAccessToken(tokens);
+    if (!accessToken) throw browserError;
+
+    onStep?.(
+      "creating_codebuddy_api_key_with_token",
+      "Browser console session was unauthorized; retrying CodeBuddy API key creation with OAuth token"
+    );
+    const backendResult = await createCodeBuddyApiKeyViaBackend({
+      accessToken,
+      providerSpecificData: tokens.providerSpecificData || {},
+      userEnterpriseId: identity.userEnterpriseId === CODEBUDDY_DEFAULT_USER_ENTERPRISE_ID ? null : identity.userEnterpriseId,
+      fetchImpl,
+      proxyOptions,
+    });
+
+    if (!backendResult?.apiKey) {
+      throw new Error(backendResult?.error || browserError.message || "CodeBuddy API key creation failed");
+    }
+
+    apiKey = backendResult.apiKey;
+    apiKeySource = "bearer_backend";
+    resolvedIdentity = {
+      userEnterpriseId: backendResult.identity?.userEnterpriseId || identity.userEnterpriseId,
+      userId: backendResult.identity?.uid || identity.userId,
+    };
+  }
 
   return {
     ...tokens,
@@ -274,10 +461,10 @@ async function defaultCreateCodeBuddyApiKeyTokens({ page, tokens = {}, onStep })
     providerSpecificData: {
       ...(tokens.providerSpecificData || {}),
       authKind: "api_key",
-      apiKeySource: "browser_backend",
+      apiKeySource,
       apiKeyCreatedAt: new Date().toISOString(),
-      userEnterpriseId: identity.userEnterpriseId,
-      ...(identity.userId ? { codeBuddyUserId: identity.userId } : {}),
+      userEnterpriseId: resolvedIdentity.userEnterpriseId,
+      ...(resolvedIdentity.userId ? { codeBuddyUserId: resolvedIdentity.userId } : {}),
     },
   };
 }
@@ -647,3 +834,8 @@ export function getCodeBuddyBulkImportManager() {
 }
 
 export { buildLookupResponse };
+
+export const __test__ = {
+  createCodeBuddyApiKeyViaBackend,
+  defaultCreateCodeBuddyApiKeyTokens,
+};

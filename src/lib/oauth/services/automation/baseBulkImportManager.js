@@ -409,7 +409,7 @@ export class BaseBulkImportManager {
     this.jobs.set(jobId, job);
     this.latestJobId = jobId;
     writePersistedLatestJobId(jobId, this.metaFile);
-    void this.persistJobSnapshot(job, { forcePreview: false });
+    writeJsonFile(getJobFile(jobId, this.storageDir), buildPersistedSnapshot(job));
     void this.runJob(jobId);
     return sanitizeJob(job);
   }

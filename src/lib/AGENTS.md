@@ -31,6 +31,7 @@
 - Google automation must evaluate Google OAuth consent before credential inputs and directly probe its approval control; Google can retain a visible password field, localize the consent copy, and place the action in a fixed footer. Consent locator fallbacks must be short and force-enabled so one atypical Google page cannot stall a bulk worker.
 - After submitting a Google identifier or password, preserve a short transition cooldown before interacting with that same field again; Google can leave the old field visible while navigation is still in progress.
 - Bulk import cancellation must immediately finalize active accounts and prevent late browser callbacks from changing cancelled results or saving new credentials.
+- Bulk import managers must persist a sanitized initial job snapshot before returning from `startJob`, so polling routes can recover jobs across Next.js worker or module boundaries.
 - Handle corrupt, absent, and legacy data explicitly where the surrounding module supports recovery.
 
 ## Verification
