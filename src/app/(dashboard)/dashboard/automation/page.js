@@ -225,11 +225,12 @@ function CodeBuddyBulkTokenModal({ isOpen, onClose, onSuccess, disabled = false 
 function CodeBuddyAutomationPanel({ providerInfo, onRefresh, disabled = false }) {
   const [isOpen, setIsOpen] = useState(false);
   const [isBulkOpen, setIsBulkOpen] = useState(false);
+  const [isBulkOAuthOpen, setIsBulkOAuthOpen] = useState(false);
   const [isBulkTokenOpen, setIsBulkTokenOpen] = useState(false);
 
   return (
     <>
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <button
           type="button"
           onClick={() => setIsBulkOpen(true)}
@@ -242,6 +243,20 @@ function CodeBuddyAutomationPanel({ providerInfo, onRefresh, disabled = false })
           </span>
           <span className="text-xs leading-relaxed text-text-muted">
             Run bulk GSuite gmail|password login with worker progress and manual assist.
+          </span>
+        </button>
+        <button
+          type="button"
+          onClick={() => setIsBulkOAuthOpen(true)}
+          disabled={disabled}
+          className={getAutomationCardClasses(disabled)}
+        >
+          <span className="flex items-center gap-2 text-sm font-semibold text-text-main">
+            <span className="material-symbols-outlined text-[20px] text-primary">key</span>
+            Auto Login Bulk (Refresh Token)
+          </span>
+          <span className="text-xs leading-relaxed text-text-muted">
+            Same bulk GSuite flow, but saves OAuth refresh tokens directly — no API key creation.
           </span>
         </button>
         <button
@@ -288,6 +303,16 @@ function CodeBuddyAutomationPanel({ providerInfo, onRefresh, disabled = false })
         requireProxyPool
         onSuccess={onRefresh}
         onClose={() => setIsBulkOpen(false)}
+      />
+      <BulkAccountAutomationModal
+        isOpen={isBulkOAuthOpen && !disabled}
+        provider="codebuddy-oauth"
+        title="CodeBuddy Bulk GSuite Login (Refresh Token)"
+        serviceName="CodeBuddy"
+        enableProxyPool
+        requireProxyPool
+        onSuccess={onRefresh}
+        onClose={() => setIsBulkOAuthOpen(false)}
       />
       <OAuthModal
         isOpen={isOpen && !disabled}
