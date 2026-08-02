@@ -229,6 +229,29 @@ function summarizeCodeBuddyResponse(value) {
     .slice(0, 160) || "unknown response";
 }
 
+// APISIX gateway in front of the CodeBuddy console started rejecting API key
+// creation with a bare "401 Authorization Required" page for both the browser
+// session and bearer backend. Detect that exact failure mode so we can fall
+// back to saving the OAuth token pair instead of failing the whole account.
+const CODEBUDDY_AUTH_GATEWAY_401_RE = /401|authorization required|apisix/i;
+
+function isCodeBuddyApiKeyGateway401(...errors) {
+  return errors.some((error) => CODEBUDDY_AUTH_GATEWAY_401_RE.test(String(error?.message || error || "")));
+}
+
+function getCodeBuddyRefreshToken(tokens = {}) {
+  const providerSpecificData = tokens.providerSpecificData || {};
+  return String(
+    tokens.refreshToken
+    || tokens.refresh_token
+    || providerSpecificData.refreshToken
+    || providerSpecificData.refresh_token
+    || providerSpecificData.rawAuth?.refreshToken
+    || providerSpecificData.rawAuth?.refresh_token
+    || ""
+  ).trim();
+}
+
 function getCodeBuddyDomain(providerSpecificData = {}) {
   return String(providerSpecificData.domain || providerSpecificData.rawAuth?.domain || "www.codebuddy.ai").trim() || "www.codebuddy.ai";
 }
@@ -446,6 +469,32 @@ async function defaultCreateCodeBuddyApiKeyTokens({ page, tokens = {}, onStep, f
     });
 
     if (!backendResult?.apiKey) {
+      // Fallback: APISIX 401 on the console API means key creation is blocked
+      // entirely. If we still hold a valid OAuth refresh token, save the
+      // connection as an oauth-type credential (accessToken + refreshToken)
+      // so chat + token refresh keep working without an API key.
+      const refreshToken = getCodeBuddyRefreshToken(tokens);
+      if (isCodeBuddyApiKeyGateway401(browserError, backendResult?.error) && refreshToken) {
+        onStep?.(
+          "codebuddy_api_key_401_oauth_fallback",
+          "CodeBuddy API key creation blocked by gateway (401); saving OAuth token pair instead"
+        );
+        return {
+          ...tokens,
+          apiKey: null,
+          providerSpecificData: {
+            ...(tokens.providerSpecificData || {}),
+            authKind: "access_token",
+            apiKeySource: "oauth_fallback_401",
+            apiKeyFallbackReason: summarizeCodeBuddyResponse(backendResult?.error || browserError.message),
+            apiKeyCreatedAt: null,
+            userEnterpriseId: backendResult?.identity?.userEnterpriseId || identity.userEnterpriseId,
+            ...((backendResult?.identity?.uid || identity.userId)
+              ? { codeBuddyUserId: backendResult?.identity?.uid || identity.userId }
+              : {}),
+          },
+        };
+      }
       throw new Error(backendResult?.error || browserError.message || "CodeBuddy API key creation failed");
     }
 
@@ -901,4 +950,6 @@ export { buildLookupResponse };
 export const __test__ = {
   createCodeBuddyApiKeyViaBackend,
   defaultCreateCodeBuddyApiKeyTokens,
+  isCodeBuddyApiKeyGateway401,
+  getCodeBuddyRefreshToken,
 };

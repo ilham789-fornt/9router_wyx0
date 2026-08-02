@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CodeBuddyBulkImportManager } from "../../src/lib/oauth/services/codebuddyBulkImportManager.js";
+import { CodeBuddyBulkImportManager, __test__ } from "../../src/lib/oauth/services/codebuddyBulkImportManager.js";
 
 function createFakeBrowser() {
   const fakePage = {
@@ -158,5 +158,131 @@ describe("CodeBuddyBulkImportManager", () => {
 
     expect(attempts).toBe(3);
     expect(finishedJob.summary.success).toBe(1);
+  });
+});
+
+describe("defaultCreateCodeBuddyApiKeyTokens 401 fallback", () => {
+  const apis401Page = () => ({
+    async evaluate(fn, { url }) {
+      // Session-prep endpoints succeed, api-keys endpoint is blocked by APISIX.
+      if (String(url).includes("/console/api/client/v1/api-keys")) {
+        return {
+          status: 401,
+          text: "<html><body>401 Authorization Required openresty Powered by APISIX</body></html>",
+          json: null,
+        };
+      }
+      if (String(url).includes("/console/accounts")) {
+        return {
+          status: 200,
+          text: JSON.stringify({ code: 0, data: { accounts: [{ uid: "uid-1", userEnterpriseId: "ent-1" }] } }),
+          json: { code: 0, data: { accounts: [{ uid: "uid-1", userEnterpriseId: "ent-1" }] } },
+        };
+      }
+      return { status: 200, text: "{}", json: {} };
+    },
+  });
+
+  const tokensWithRefresh = {
+    accessToken: "access-1",
+    refreshToken: "refresh-1",
+    expiresIn: 86400,
+    providerSpecificData: { domain: "www.codebuddy.ai" },
+  };
+
+  function makeBackend401Fetch() {
+    return async (url) => {
+      if (String(url).includes("/v2/plugin/accounts")) {
+        return new Response(JSON.stringify({
+          code: 0,
+          data: { accounts: [{ uid: "uid-1", enterpriseId: "ent-1", userEnterpriseId: "ent-1", lastLogin: true }] },
+        }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      // api-keys backend call → APISIX 401
+      return new Response(
+        "<html><body>401 Authorization Required openresty Powered by APISIX</body></html>",
+        { status: 401, headers: { "Content-Type": "text/html" } }
+      );
+    };
+  }
+
+  it("falls back to OAuth token pair when browser and backend key creation both hit 401", async () => {
+    const steps = [];
+    const result = await __test__.defaultCreateCodeBuddyApiKeyTokens({
+      page: apis401Page(),
+      tokens: tokensWithRefresh,
+      fetchImpl: makeBackend401Fetch(),
+      onStep: (step) => steps.push(step),
+    });
+
+    expect(result.apiKey).toBeNull();
+    expect(result.refreshToken).toBe("refresh-1");
+    expect(result.accessToken).toBe("access-1");
+    expect(result.providerSpecificData.authKind).toBe("access_token");
+    expect(result.providerSpecificData.apiKeySource).toBe("oauth_fallback_401");
+    expect(result.providerSpecificData.userEnterpriseId).toBe("ent-1");
+    expect(result.providerSpecificData.codeBuddyUserId).toBe("uid-1");
+    expect(steps).toContain("codebuddy_api_key_401_oauth_fallback");
+  });
+
+  it("does not fall back when there is no refresh token", async () => {
+    await expect(
+      __test__.defaultCreateCodeBuddyApiKeyTokens({
+        page: apis401Page(),
+        tokens: { accessToken: "access-1", providerSpecificData: {} },
+        fetchImpl: makeBackend401Fetch(),
+      })
+    ).rejects.toThrow(/CodeBuddy/);
+  });
+
+  it("does not fall back for non-401 failures", async () => {
+    const browser500Page = () => ({
+      async evaluate(fn, { url }) {
+        if (String(url).includes("/console/api/client/v1/api-keys")) {
+          return { status: 500, text: JSON.stringify({ code: 500, msg: "internal error" }), json: { code: 500, msg: "internal error" } };
+        }
+        if (String(url).includes("/console/accounts")) {
+          return {
+            status: 200,
+            text: JSON.stringify({ code: 0, data: { accounts: [{ uid: "uid-1", userEnterpriseId: "ent-1" }] } }),
+            json: { code: 0, data: { accounts: [{ uid: "uid-1", userEnterpriseId: "ent-1" }] } },
+          };
+        }
+        return { status: 200, text: "{}", json: {} };
+      },
+    });
+    const backend500Fetch = async (url) => {
+      if (String(url).includes("/v2/plugin/accounts")) {
+        return new Response(JSON.stringify({ code: 0, data: { accounts: [] } }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({ code: 500, msg: "internal error" }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+
+    await expect(
+      __test__.defaultCreateCodeBuddyApiKeyTokens({
+        page: browser500Page(),
+        tokens: tokensWithRefresh,
+        fetchImpl: backend500Fetch,
+      })
+    ).rejects.toThrow();
+  });
+
+  it("detects the APISIX 401 signature", () => {
+    expect(__test__.isCodeBuddyApiKeyGateway401(new Error("CodeBuddy API key creation failed (401): 401 Authorization Required openresty Powered by APISIX"))).toBe(true);
+    expect(__test__.isCodeBuddyApiKeyGateway401(new Error("some other failure (403): forbidden"))).toBe(false);
+    expect(__test__.isCodeBuddyApiKeyGateway401(new Error("some other failure (403): forbidden"), "401 Authorization Required")).toBe(true);
+  });
+
+  it("extracts refresh token from multiple token shapes", () => {
+    expect(__test__.getCodeBuddyRefreshToken({ refreshToken: "r1" })).toBe("r1");
+    expect(__test__.getCodeBuddyRefreshToken({ refresh_token: "r2" })).toBe("r2");
+    expect(__test__.getCodeBuddyRefreshToken({ providerSpecificData: { rawAuth: { refreshToken: "r3" } } })).toBe("r3");
+    expect(__test__.getCodeBuddyRefreshToken({})).toBe("");
   });
 });
