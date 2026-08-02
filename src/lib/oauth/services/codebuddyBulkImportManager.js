@@ -22,6 +22,8 @@ import {
   handleCodeBuddyStartedAuthorization,
   isProviderPage,
 } from "./automation/googleOAuth.js";
+import { resolveBulkImportProxy } from "./bulkImportProxyResolver.js";
+import { pickWorkingLoginProxy } from "./automation/proxyLoginPicker.js";
 import { proxyAwareFetch } from "open-sse/utils/proxyFetch.js";
 
 const CODEBUDDY_PROVIDER_ID = "codebuddy";
@@ -565,12 +567,14 @@ export class CodeBuddyBulkImportManager extends BaseBulkImportManager {
     pollToken = defaultPollForToken,
     saveConnection = defaultSaveCodeBuddyConnection,
     createApiKeyTokens = defaultCreateCodeBuddyApiKeyTokens,
+    proxyResolver = resolveBulkImportProxy,
     pollIntervalMs = CODEBUDDY_POLL_INTERVAL_MS,
   } = {}) {
     super({
       storageName: "codebuddy-bulk-import",
       providerLabel: CODEBUDDY_LABEL,
       browserLauncher,
+      browserPerAccount: true,
       defaultConcurrency: CODEBUDDY_BULK_IMPORT_DEFAULT_CONCURRENCY,
     });
 
@@ -579,10 +583,11 @@ export class CodeBuddyBulkImportManager extends BaseBulkImportManager {
     this.pollToken = pollToken;
     this.saveConnection = saveConnection;
     this.createApiKeyTokens = createApiKeyTokens;
+    this.proxyResolver = proxyResolver;
     this.pollIntervalMs = pollIntervalMs;
   }
 
-  startJob({ accounts, parsedAccounts, concurrency, browser } = {}) {
+  async startJob({ accounts, parsedAccounts, concurrency, browser, proxyPoolId = null, proxyUrl = null } = {}) {
     let normalizedAccounts = parsedAccounts;
 
     if (!Array.isArray(normalizedAccounts)) {
@@ -594,11 +599,68 @@ export class CodeBuddyBulkImportManager extends BaseBulkImportManager {
       normalizedAccounts = parsed;
     }
 
-    return super.startJob({
+    // Resolve proxy pool (optional). When a pool is selected every worker
+    // launches through one proxy from the pool, distributed round-robin.
+    let resolvedProxy = null;
+    if (proxyPoolId || proxyUrl) {
+      resolvedProxy = await this.proxyResolver({ proxyPoolId, proxyUrl });
+      if (resolvedProxy.error) {
+        throw Object.assign(new Error(resolvedProxy.error), { error: resolvedProxy.error, status: 400 });
+      }
+      if (!(resolvedProxy.proxyUrls || []).length) {
+        const error = "Proxy pool has no usable proxies";
+        throw Object.assign(new Error(error), { error, status: 400 });
+      }
+
+      // PRE-FLIGHT: probe every candidate proxy with a real HTTP request and
+      // keep only the ones that can reach the CodeBuddy login endpoint. This
+      // guarantees the proxy handed to Camoufox is alive BEFORE we spend a
+      // browser launch on it — the behaviour that makes the reference wrap
+      // reliable. Dead proxies are dropped here instead of failing mid-login.
+      const reachable = [];
+      for (const candidate of resolvedProxy.proxyUrls) {
+        // pickWorkingLoginProxy returns the candidate itself when reachable.
+        // We probe one-by-one so we can keep every working proxy for the pool.
+        const picked = await pickWorkingLoginProxy({
+          proxyUrls: [candidate],
+          testUrl: "https://www.codebuddy.ai/login",
+        });
+        if (picked.proxyUrl) reachable.push(candidate);
+      }
+      if (!reachable.length) {
+        const error = `No proxy in the selected pool could reach the CodeBuddy login endpoint (${resolvedProxy.proxyUrls.length} checked)`;
+        throw Object.assign(new Error(error), { error, status: 400 });
+      }
+      resolvedProxy = { ...resolvedProxy, proxyUrls: reachable, proxyUrl: reachable[0] };
+    }
+
+    // Distribute proxies to accounts. When the pool has fewer proxies than
+    // accounts, cycle through the available proxies (round-robin) so every
+    // worker still launches with a proxy.
+    const availableProxyUrls = resolvedProxy?.proxyUrls || [];
+    const proxyByLine = new Map((normalizedAccounts || []).map((account, index) => [
+      account.line,
+      availableProxyUrls.length
+        ? availableProxyUrls[index % availableProxyUrls.length]
+        : null,
+    ]));
+
+    const sanitizedJob = super.startJob({
       parsedAccounts: normalizedAccounts,
       concurrency,
       browser,
+      browserLaunchOptions: ({ account }) => ({
+        headless: true,
+        proxy: proxyByLine.get(account.line) || null,
+        humanize: true,
+      }),
     });
+    const job = this.jobs.get(sanitizedJob.jobId);
+    if (job) {
+      job.proxyPoolId = resolvedProxy?.proxyPoolId || null;
+      job.proxySource = resolvedProxy?.proxySource || null;
+    }
+    return this.getJob(sanitizedJob.jobId);
   }
 
   async runManualFollowup(job, account, workerId, context, successPromise) {
@@ -679,13 +741,14 @@ export class CodeBuddyBulkImportManager extends BaseBulkImportManager {
     job.manualFollowups.add(followupPromise);
   }
 
-  async processAccount(job, account, workerId) {
-    if (job.cancelRequested || !job.browser) {
+  async processAccount(job, account, workerId, accountBrowser = null) {
+    const browser = accountBrowser || job.browser;
+    if (job.cancelRequested || !browser) {
       this.finalizeAccount(account, "cancelled", { error: "Job cancelled" });
       return;
     }
 
-    const { context, page } = await createFreshContext(job.browser);
+    const { context, page } = await createFreshContext(browser);
     account.runtimeSession = { context, page };
     let pollController = null;
 

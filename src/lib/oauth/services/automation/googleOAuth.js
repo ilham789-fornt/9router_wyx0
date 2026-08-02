@@ -1,4 +1,9 @@
-const DEFAULT_SHORT_TIMEOUT_MS = 90_000;
+// Time the automated Google+provider flow is allowed to run before the worker
+// gives up and surfaces "Manual assist required". Raised from 90s to 6 minutes
+// so slow proxies, Google speedbumps, and fresh-account consent/onboarding
+// screens have room to complete. 5 minutes was requested; we use 6 to leave
+// margin after the consent/scroll settle delays.
+const DEFAULT_SHORT_TIMEOUT_MS = 6 * 60_000;
 const DEFAULT_MANUAL_TIMEOUT_MS = 15 * 60_000;
 const GOOGLE_EMAIL_TRANSITION_GRACE_MS = 6_000;
 const GOOGLE_PASSWORD_TRANSITION_GRACE_MS = 8_000;
@@ -341,6 +346,11 @@ async function clickFirstActionable(page, selectors) {
       if (!count) continue;
 
       await locator.scrollIntoViewIfNeeded().catch(() => null);
+      // Settle after the scroll so the target is fully in view and any
+      // scroll-triggered layout has finished before we read visibility and
+      // click. Clicking immediately after scrollIntoViewIfNeeded on a fresh
+      // account can drop the event and surface as "Something went wrong".
+      await page.waitForTimeout(300);
 
       const visible = await locator.isVisible().catch(() => false);
       if (!visible) continue;
@@ -652,15 +662,23 @@ function getSafePagePath(page) {
 
 async function handleGoogleConsent(page, reportStep) {
   if (!isGoogleAuthPage(page)) return false;
-  // Keep this immediate and DOM-first. Google localizes consent copy and its
-  // fixed footer can make Playwright-style locator clicks wait for seconds.
-  // Enow's flow succeeds by probing the actual approval control on every
-  // Google page instead of first requiring a particular consent sentence.
+  // Settle briefly before probing the approval control. A fresh Google account
+  // renders the consent footer and the OAuth speedbump asynchronously; probing
+  // too early makes Google return a generic "Something went wrong" page. Give
+  // the document a short moment to finish wiring the consent action.
+  await page.waitForTimeout(900);
+  // Keep this DOM-first. Google localizes consent copy and its fixed footer can
+  // make Playwright-style locator clicks wait for seconds. Enow's flow succeeds
+  // by probing the actual approval control on every Google page instead of
+  // first requiring a particular consent sentence.
   const clickedApprove = await clickGoogleConsentByDom(page)
     || await clickGoogleConsentLocatorFallback(page);
   if (clickedApprove) {
     reportStep("approving_google_consent", "Approving Google OAuth consent");
-    await page.waitForTimeout(1000);
+    // Post-click settle: let the consent POST round-trip before the next poll
+    // loop re-reads the page, so we do not immediately hit a half-navigated
+    // document that surfaces as "Something went wrong".
+    await page.waitForTimeout(1500);
     return true;
   }
 
@@ -671,7 +689,7 @@ async function clickGoogleConsentByDom(page) {
   const consentActionPattern = /continue|allow|lanjut|izinkan|setuju|accept|yes|ok|oke|got it|i understand/i;
 
   for (const scope of getInteractionScopes(page)) {
-    const clicked = await scope.evaluate((patternSource) => {
+    const clicked = await scope.evaluate(async (patternSource) => {
       const isVisible = (element) => {
         if (!(element instanceof HTMLElement)) return false;
         const style = window.getComputedStyle(element);
@@ -685,6 +703,10 @@ async function clickGoogleConsentByDom(page) {
       const directApprove = document.querySelector("#submit_approve_access button, #submit_approve_access");
       if (directApprove instanceof HTMLElement && isVisible(directApprove) && !directApprove.hasAttribute("disabled")) {
         directApprove.scrollIntoView({ block: "center", inline: "center" });
+        // Let the scroll settle before interacting so a fresh-account consent
+        // footer does not receive the click mid-scroll (which drops the event
+        // and can surface as "Something went wrong").
+        await new Promise((resolve) => setTimeout(resolve, 400));
         directApprove.focus?.();
         directApprove.click();
         directApprove.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
@@ -707,6 +729,8 @@ async function clickGoogleConsentByDom(page) {
       });
       if (!action) return false;
       action.scrollIntoView({ block: "center", inline: "center" });
+      // Same scroll-settle guard as the direct-approve path above.
+      await new Promise((resolve) => setTimeout(resolve, 400));
       action.focus?.();
       action.click();
       action.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
@@ -749,7 +773,10 @@ async function handleGoogleOnboarding(page, pageText) {
     if (root) root.scrollTop = root.scrollHeight;
     window.scrollTo(0, document.body?.scrollHeight || document.documentElement?.scrollHeight || 0);
   }).catch(() => null);
-  await page.waitForTimeout(500);
+  // Settle after the bottom-scroll so freshly-rendered onboarding buttons are
+  // fully laid out before we probe them — avoids clicking a half-painted
+  // control on a fresh account (which can surface as "Something went wrong").
+  await page.waitForTimeout(900);
 
   const clickedSkip = await clickFirstActionable(page, SKIP_BUTTON_SELECTORS);
   if (clickedSkip) {

@@ -14,6 +14,12 @@ const DEFAULT_CONCURRENCY = 4;
 const ACTIVE_JOB_STATUSES = new Set(["queued", "running", "needs_manual"]);
 const TERMINAL_JOB_STATUSES = new Set(["completed", "failed", "cancelled"]);
 
+// Sentinel values for the proxy-pool select. Kept in sync with the server-side
+// resolver (`AUTO_PROXY_POOL_ID` in bulkImportProxyResolver.js). Empty string
+// ("None / direct") is sent as-is and treated by the server as no proxy.
+const AUTO_PROXY_POOL_ID = "__auto__";
+const NONE_PROXY_POOL_ID = "";
+
 function getRecommendedConcurrency({ defaultConcurrency, maxConcurrency }) {
   if (typeof navigator === "undefined") {
     return {
@@ -176,6 +182,10 @@ export default function BulkAccountAutomationModal({
   maxConcurrency = 8,
   accountFormat = "gmail|password",
   introText,
+  enableProxyPool = false,
+  // When true the operator must pick a real pool (or Auto pool). When false
+  // (default when enableProxyPool is on) "None (direct)" is also offered.
+  requireProxyPool = false,
 }) {
   const storageKey = `${provider}-bulk-import-active-job`;
   const notify = useNotificationStore();
@@ -186,6 +196,12 @@ export default function BulkAccountAutomationModal({
   const [activeJob, setActiveJob] = useState(null);
   const [error, setError] = useState(null);
   const [importing, setImporting] = useState(false);
+  const [proxyPools, setProxyPools] = useState([]);
+  // Default: "Auto pool" when the flow requires a proxy, "None (direct)"
+  // otherwise. Both stay valid whether pools are loaded yet or not.
+  const [proxyPoolId, setProxyPoolId] = useState(() => (
+    requireProxyPool ? AUTO_PROXY_POOL_ID : NONE_PROXY_POOL_ID
+  ));
   const [jobRestoreNotice, setJobRestoreNotice] = useState(null);
   const browserChoice = DEFAULT_AUTOMATION_BROWSER;
   const runningJob = activeJob && ACTIVE_JOB_STATUSES.has(activeJob.status);
@@ -280,6 +296,36 @@ export default function BulkAccountAutomationModal({
   }, [isOpen, provider, storageKey]);
 
   useEffect(() => {
+    if (!isOpen || !enableProxyPool) return undefined;
+    let cancelled = false;
+    fetch("/api/proxy-pools?view=options&isActive=true", { cache: "no-store" })
+      .then((response) => response.json())
+      .then((data) => {
+        if (cancelled) return;
+        const pools = (Array.isArray(data) ? data : data?.proxyPools || data?.pools || [])
+          .filter((pool) => pool?.isActive !== false && !["vercel", "cloudflare", "deno"].includes(pool?.type));
+        setProxyPools(pools);
+        // Keep Auto/None sentinels intact. Only fall back to the first pool
+        // when the flow requires a proxy AND the current selection points to
+        // a specific pool that no longer exists in the loaded list.
+        setProxyPoolId((current) => {
+          if (current === AUTO_PROXY_POOL_ID) return current;
+          if (current === NONE_PROXY_POOL_ID) {
+            return requireProxyPool && pools.length ? pools[0].id : NONE_PROXY_POOL_ID;
+          }
+          if (pools.some((pool) => pool.id === current)) return current;
+          return requireProxyPool
+            ? (pools.length ? pools[0].id : AUTO_PROXY_POOL_ID)
+            : NONE_PROXY_POOL_ID;
+        });
+      })
+      .catch(() => {
+        if (!cancelled) setProxyPools([]);
+      });
+    return () => { cancelled = true; };
+  }, [enableProxyPool, isOpen, requireProxyPool]);
+
+  useEffect(() => {
     if (!isOpen || !activeJob?.jobId || finishedJob) return undefined;
 
     const interval = window.setInterval(async () => {
@@ -327,6 +373,7 @@ export default function BulkAccountAutomationModal({
           accounts: lines,
           concurrency: Number.parseInt(concurrency, 10) || defaultConcurrency,
           browser: browserChoice,
+          ...(enableProxyPool ? { proxyPoolId } : {}),
         }),
       });
       const data = await readBulkApiResponse(res, "Bulk account import failed");
@@ -455,6 +502,53 @@ export default function BulkAccountAutomationModal({
               </div>
               <p className="mt-1 text-xs text-text-muted">Runs isolated browser workers in the background.</p>
             </div>
+
+            {enableProxyPool && (
+              <div className="rounded-lg border border-border bg-background p-3">
+                <label htmlFor={`${provider}-bulk-proxy-pool`} className="mb-1 block text-sm font-medium">
+                  Worker proxy pool
+                  {!requireProxyPool && <span className="ml-1 text-xs font-normal text-text-muted">(optional)</span>}
+                </label>
+                <select
+                  id={`${provider}-bulk-proxy-pool`}
+                  value={proxyPoolId}
+                  onChange={(event) => setProxyPoolId(event.target.value)}
+                  className="w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+                >
+                  <option value={AUTO_PROXY_POOL_ID}>
+                    Auto pool — combine every active pool
+                  </option>
+                  {!requireProxyPool && (
+                    <option value={NONE_PROXY_POOL_ID}>
+                      None (direct) — no proxy, workers use host IP
+                    </option>
+                  )}
+                  {proxyPools.length > 0 && (
+                    <optgroup label="Specific pool">
+                      {proxyPools.map((pool) => (
+                        <option key={pool.id} value={pool.id}>
+                          {pool.name || pool.id} ({pool.type || "http"})
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
+                </select>
+                {proxyPools.length === 0 && (
+                  <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
+                    No active browser-compatible proxy pool found. {requireProxyPool
+                      ? "This flow requires a proxy pool — add one under Proxy Pools first."
+                      : "You can still start in direct mode; add pools later for better isolation."}
+                  </p>
+                )}
+                <p className="mt-1 text-xs text-text-muted">
+                  {proxyPoolId === AUTO_PROXY_POOL_ID
+                    ? "Auto pool picks one proxy per worker from every active pool, round-robin."
+                    : proxyPoolId === NONE_PROXY_POOL_ID
+                      ? "Workers share the host outbound IP. Scale-out benefits from a proxy pool."
+                      : "Each worker uses one proxy from the selected pool, distributed round-robin."}
+                </p>
+              </div>
+            )}
           </>
         )}
 
@@ -675,4 +769,6 @@ BulkAccountAutomationModal.propTypes = {
   maxConcurrency: PropTypes.number,
   accountFormat: PropTypes.string,
   introText: PropTypes.string,
+  enableProxyPool: PropTypes.bool,
+  requireProxyPool: PropTypes.bool,
 };

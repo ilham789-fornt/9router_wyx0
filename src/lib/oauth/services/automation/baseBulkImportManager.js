@@ -46,7 +46,20 @@ export const AUTOMATION_CONTEXT_OPTIONS = {};
 export const AUTOMATION_STEALTH_INIT_SCRIPT = "";
 
 export async function createFreshContext(browser) {
-  const context = await browser.newContext(AUTOMATION_CONTEXT_OPTIONS);
+  // Inject the proxy credentials attached at launch time. Proxy authentication
+  // is a CONTEXT option in Playwright (injected as the Proxy-Authorization
+  // header); an HTTP proxy that requires auth returns 407 for every request
+  // unless httpCredentials is set on the context. We keep the rest of the
+  // context options empty so Camoufox retains full ownership of the fingerprint.
+  const contextOptions = { ...AUTOMATION_CONTEXT_OPTIONS };
+  const proxyCredentials = browser?.__proxyHttpCredentials;
+  if (proxyCredentials && (proxyCredentials.username || proxyCredentials.password)) {
+    contextOptions.httpCredentials = {
+      username: proxyCredentials.username || "",
+      password: proxyCredentials.password || "",
+    };
+  }
+  const context = await browser.newContext(contextOptions);
   const page = await context.newPage();
   return { context, page };
 }
@@ -329,8 +342,12 @@ async function revealBrowserWindow(page) {
 
 // ── Default Browser Launcher ───────────────────────────────────────────────────
 
-async function defaultBrowserLauncher(browser = DEFAULT_AUTOMATION_BROWSER) {
-  return await createAutomationBrowserLauncher(browser, { headless: true })();
+async function defaultBrowserLauncher(browser = DEFAULT_AUTOMATION_BROWSER, options = {}) {
+  return await createAutomationBrowserLauncher(browser, {
+    headless: options.headless !== false,
+    proxy: options.proxy || null,
+    humanize: options.humanize === true,
+  })();
 }
 
 // ── Base Class ─────────────────────────────────────────────────────────────────
@@ -365,7 +382,7 @@ export class BaseBulkImportManager {
 
   // ── Job Lifecycle ────────────────────────────────────────────────────────
 
-  startJob({ parsedAccounts, concurrency, browser }) {
+  startJob({ parsedAccounts, concurrency, browser, browserLaunchOptions = null, prelaunchedBrowsers = null }) {
     if (!parsedAccounts.length) {
       throw Object.assign(new Error("At least one account entry is required"), { error: "At least one account entry is required" });
     }
@@ -378,6 +395,7 @@ export class BaseBulkImportManager {
       status: "running",
       concurrency: clampConcurrency(concurrency, { def: this.defaultConcurrency }),
       browserChoice,
+      browserLaunchOptions,
       createdAt,
       startedAt: createdAt,
       finishedAt: null,
@@ -385,6 +403,7 @@ export class BaseBulkImportManager {
       cancelRequested: false,
       browser: null,
       activeBrowsers: new Set(),
+      prelaunchedBrowsers: prelaunchedBrowsers || new Map(),
       nextIndex: 0,
       manualFollowups: new Set(),
       persistPromise: Promise.resolve(),
@@ -605,7 +624,21 @@ export class BaseBulkImportManager {
       let accountBrowser = job.browser;
       try {
         if (this.browserPerAccount) {
-          accountBrowser = await this.browserLauncher(job.browserChoice || DEFAULT_AUTOMATION_BROWSER);
+          accountBrowser = job.prelaunchedBrowsers?.get(account.line) || null;
+          job.prelaunchedBrowsers?.delete(account.line);
+          if (!accountBrowser) {
+            const launchOptions = typeof job.browserLaunchOptions === "function"
+              ? await job.browserLaunchOptions({ job, account, workerId })
+              : (job.browserLaunchOptions || {});
+            accountBrowser = await this.browserLauncher(
+              job.browserChoice || DEFAULT_AUTOMATION_BROWSER,
+              launchOptions
+            );
+          }
+          if (job.cancelRequested) {
+            await accountBrowser.close().catch(() => null);
+            return;
+          }
           job.activeBrowsers.add(accountBrowser);
         }
         await this.processAccount(job, account, workerId, accountBrowser);
