@@ -17,6 +17,8 @@
 - Translation commonly uses OpenAI as an intermediate format: source to OpenAI to target for requests, and target to OpenAI to source for responses.
 - Preserve reasoning, thinking blocks, system content, tool identifiers, tool indexes, argument strings, images, audio, error state, and tool-choice semantics whenever the target supports them.
 - OpenAI chat-to-Responses conversion preserves explicitly supplied `prompt_cache_key` and `service_tier`; an empty `tool_calls` array is not a completed tool-call message.
+- OpenAI chat-to-Responses conversion treats the first system or developer message as instructions, while Responses-to-Chat conversion removes Responses-only `client_metadata` before provider dispatch.
+- Claude preparation must retain image-only and document-only messages, and OpenAI-to-Claude tool conversion must accept both typed and bare `{ function: ... }` wrappers.
 - Gemini schema cleanup recursively removes unsupported JSON Schema array, numeric, content, and unevaluated keywords before provider submission.
 - Keep passthrough behavior intact when source and target formats are identical.
 - Register new translators through the existing registry pattern and update `tests/translator/registerAll.js` for Vitest.

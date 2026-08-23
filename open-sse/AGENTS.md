@@ -27,6 +27,7 @@
 - Keep provider registry `features.usage` and `features.usageApikey` aligned with implemented usage handlers so dashboard/API eligibility matches runtime support.
 - Provider-specific usage handlers may return durable metadata patches, but credit refreshes must not overwrite authentication, activation, or gateway-state metadata owned by the provider lifecycle.
 - Keep Trae's two-step SOLO transport, Windsurf's gRPC-web protobuf framing, and Zed's hosted NDJSON/RSA exchange in their specialized executors; none is compatible with the default JSON/SSE executor.
+- Codex request normalization preserves Responses `text.format` structured-output configuration while stripping fields outside its explicit allowlist.
 - Windsurf ToolCallChunk frames must become an explicit compatibility error until their proprietary identifiers are mapped; never discard them as ordinary content or a successful terminal response.
 - Treat `providers/registry/index.js` as generated output; regenerate it after adding or removing registry modules.
 - Keep registry header keys canonical for their wire protocol; Anthropic's version header is lowercase so compatible request headers cannot create a case-variant duplicate.
