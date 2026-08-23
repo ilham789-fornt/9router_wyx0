@@ -206,10 +206,6 @@ export async function handleStreamingResponse({ providerResponse, provider, mode
     streamController,
     onStreamComplete,
   };
-  const transformedBody = provider === "codebuddy" && retryProviderResponse
-    ? await buildCodeBuddyRetryingBody({ ...streamOptions, retryProviderResponse })
-    : createTransformedBody(streamOptions);
-
   saveRequestDetail(buildRequestDetail({
     provider, model, connectionId,
     latency: { ttft: 0, total: Date.now() - requestStartTime },
@@ -222,6 +218,10 @@ export async function handleStreamingResponse({ providerResponse, provider, mode
   }, { id: streamDetailId })).catch(err => {
     console.error("[RequestDetail] Failed to save streaming request:", err.message);
   });
+
+  const transformedBody = provider === "codebuddy" && retryProviderResponse
+    ? await buildCodeBuddyRetryingBody({ ...streamOptions, retryProviderResponse })
+    : createTransformedBody(streamOptions);
 
   return {
     success: true,

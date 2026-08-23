@@ -160,8 +160,14 @@ describe("CodeBuddy streaming preservation", () => {
     expect(responseText).not.toContain("Short");
     expect(controller.handleComplete).toHaveBeenCalledOnce();
     expect(usageDbMocks.saveRequestDetail).toHaveBeenCalledTimes(2);
-    const detailIds = usageDbMocks.saveRequestDetail.mock.calls.map(([detail]) => detail.id);
+    const details = usageDbMocks.saveRequestDetail.mock.calls.map(([detail]) => detail);
+    const detailIds = details.map((detail) => detail.id);
     expect(new Set(detailIds)).toEqual(new Set([streamDetailId]));
+    expect(details[0].response.content).toBe("[Streaming in progress...]");
+    expect(details[1]).toEqual(expect.objectContaining({
+      providerResponse: "This is the complete retried answer.",
+      tokens: expect.objectContaining({ completion_tokens: 12 }),
+    }));
   });
 
   it("does not retry a normal completion", async () => {
