@@ -20,7 +20,18 @@ import {
   registerXaiSession,
   getXaiSessionStatus,
   clearXaiSession,
+  startTraeProxy,
+  stopTraeProxy,
+  registerTraeSession,
+  getTraeSessionStatus,
+  clearTraeSession,
+  startWindsurfProxy,
+  stopWindsurfProxy,
+  registerWindsurfSession,
+  getWindsurfSessionStatus,
+  clearWindsurfSession,
 } from "@/lib/oauth/utils/server";
+import { detectIdeInstalled } from "@/lib/oauth/utils/ideDetect";
 
 function defaultConnectionActive(provider) {
   return AI_PROVIDERS[provider]?.defaultActive !== false;
@@ -90,8 +101,10 @@ export async function GET(request, { params }) {
 
     if (action === "start-proxy") {
       await assertProviderEnabled(provider);
+      if (provider === "trae") return NextResponse.json(await startTraeProxy());
+      if (provider === "windsurf") return NextResponse.json(await startWindsurfProxy());
       if (!["codex", "xai"].includes(provider)) {
-        return NextResponse.json({ error: "Proxy only supported for codex/xai" }, { status: 400 });
+        return NextResponse.json({ error: "Proxy only supported for codex/xai/trae/windsurf" }, { status: 400 });
       }
       const appPort = searchParams.get("app_port");
       if (!appPort) {
@@ -113,18 +126,22 @@ export async function GET(request, { params }) {
     }
 
     if (action === "poll-status") {
-      if (!["codex", "xai"].includes(provider)) {
-        return NextResponse.json({ error: "Poll only supported for codex/xai" }, { status: 400 });
-      }
       const state = searchParams.get("state");
       if (!state) {
         return NextResponse.json({ error: "Missing state" }, { status: 400 });
       }
-      const session = provider === "xai" ? getXaiSessionStatus(state) : getCodexSessionStatus(state);
+      let session;
+      if (provider === "trae") session = getTraeSessionStatus(state);
+      else if (provider === "windsurf") session = getWindsurfSessionStatus(state);
+      else if (provider === "xai") session = getXaiSessionStatus(state);
+      else if (provider === "codex") session = getCodexSessionStatus(state);
+      else return NextResponse.json({ error: "Poll only supported for codex/xai/trae/windsurf" }, { status: 400 });
       if (!session) return NextResponse.json({ status: "unknown" });
       if (session.status === "done" || session.status === "error") {
         const payload = { ...session };
-        if (provider === "xai") clearXaiSession(state);
+        if (provider === "trae") clearTraeSession(state);
+        else if (provider === "windsurf") clearWindsurfSession(state);
+        else if (provider === "xai") clearXaiSession(state);
         else clearCodexSession(state);
         return NextResponse.json(payload);
       }
@@ -132,12 +149,20 @@ export async function GET(request, { params }) {
     }
 
     if (action === "stop-proxy") {
-      if (!["codex", "xai"].includes(provider)) {
-        return NextResponse.json({ error: "Proxy only supported for codex/xai" }, { status: 400 });
-      }
-      if (provider === "xai") stopXaiProxy();
-      else stopCodexProxy();
+      if (provider === "trae") stopTraeProxy();
+      else if (provider === "windsurf") stopWindsurfProxy();
+      else if (provider === "xai") stopXaiProxy();
+      else if (provider === "codex") stopCodexProxy();
+      else return NextResponse.json({ error: "Proxy only supported for codex/xai/trae/windsurf" }, { status: 400 });
       return NextResponse.json({ success: true });
+    }
+
+    if (action === "ide-status") {
+      await assertProviderEnabled(provider);
+      if (!["trae", "windsurf"].includes(provider)) {
+        return NextResponse.json({ error: "ide-status only supported for trae/windsurf" }, { status: 400 });
+      }
+      return NextResponse.json(await detectIdeInstalled(provider));
     }
 
     if (action === "device-code") {
@@ -196,9 +221,45 @@ export async function POST(request, { params }) {
       return NextResponse.json({ error: "Invalid or empty request body" }, { status: 400 });
     }
 
+    if (action === "register-session") {
+      await assertProviderEnabled(provider);
+      const state = body?.state;
+      if (!state) return NextResponse.json({ error: "Missing state" }, { status: 400 });
+      let registered = false;
+      if (provider === "trae") registered = registerTraeSession({ state });
+      else if (provider === "windsurf") registered = registerWindsurfSession({ state });
+      else return NextResponse.json({ error: "register-session only supported for trae/windsurf" }, { status: 400 });
+      return NextResponse.json({ success: registered });
+    }
+
     if (action === "exchange") {
       await assertProviderEnabled(provider);
       const { code, redirectUri, codeVerifier, state, meta } = body;
+
+      if (provider === "trae" || provider === "windsurf") {
+        const token = typeof code === "string" ? code.trim() : "";
+        if (!token) return NextResponse.json({ error: "Missing token or callback URL" }, { status: 400 });
+        const tokenData = await exchangeTokens(provider, token, null, null, state);
+        const connection = await createProviderConnection({
+          provider,
+          authType: provider === "windsurf" ? "api_key" : "oauth",
+          ...tokenData,
+          expiresAt: tokenData.expiresIn
+            ? new Date(Date.now() + tokenData.expiresIn * 1000).toISOString()
+            : null,
+          isActive: defaultConnectionActive(provider),
+          testStatus: "active",
+        });
+        return NextResponse.json({
+          success: true,
+          connection: {
+            id: connection.id,
+            provider: connection.provider,
+            email: connection.email,
+            displayName: connection.displayName,
+          },
+        });
+      }
 
       // Detect if "code" is actually a raw JWT access token (starts with eyJ)
       if (code && code.startsWith("eyJ") && code.includes(".")) {

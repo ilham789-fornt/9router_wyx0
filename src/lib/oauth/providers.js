@@ -26,6 +26,8 @@ import {
   GITLAB_CONFIG,
   CODEBUDDY_CONFIG,
   CODEBUDDY_CN_CONFIG,
+  TRAE_CONFIG,
+  WINDSURF_CONFIG,
   getOAuthClientMetadata,
 } from "./constants/oauth";
 import { XAI_CONFIG, XAI_PKCE_VERIFIER_BYTES } from "./constants/xai";
@@ -58,6 +60,369 @@ async function discoverXaiEndpoints() {
   cachedXaiDiscovery = { authorizeUrl: XAI_CONFIG.authorizeUrl, tokenUrl: XAI_CONFIG.tokenUrl };
   return cachedXaiDiscovery;
 }
+
+function extractJsonPath(data, paths) {
+  for (const path of paths) {
+    let value = data;
+    for (const key of path) value = value?.[key];
+    if (value !== undefined && value !== null && value !== "") return value;
+  }
+  return null;
+}
+
+function buildTraeDeviceContext() {
+  return {
+    plugin_version: TRAE_CONFIG.defaultPluginVersion,
+    machine_id: crypto.randomUUID(),
+    device_id: TRAE_CONFIG.defaultDeviceId,
+    x_device_brand: "unknown",
+    x_device_type: "unknown",
+    x_os_version: "unknown",
+    x_env: "",
+    x_app_version: TRAE_CONFIG.defaultAppVersion,
+    x_app_type: TRAE_CONFIG.defaultAppType,
+  };
+}
+
+async function fetchTraeLoginGuidance(loginTraceId) {
+  const body = JSON.stringify({ loginTraceID: loginTraceId, login_trace_id: loginTraceId });
+  let lastError = "no successful response";
+  for (const url of TRAE_CONFIG.loginGuidanceUrls) {
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          "User-Agent": TRAE_CONFIG.userAgent,
+        },
+        body,
+      });
+      if (!response.ok) {
+        lastError = `${url} HTTP ${response.status}`;
+        continue;
+      }
+      const data = await response.json();
+      const loginHost = extractJsonPath(data, [
+        ["Result", "LoginHost"], ["Result", "loginHost"], ["Result", "LoginURL"],
+        ["result", "loginHost"], ["data", "Result", "LoginHost"], ["data", "loginHost"],
+        ["LoginHost"], ["loginHost"],
+      ]);
+      if (loginHost) return loginHost;
+      lastError = `${url} missing LoginHost`;
+    } catch (error) {
+      lastError = `${url} ${error.message}`;
+    }
+  }
+  throw new Error(`Trae GetLoginGuidance failed: ${lastError}`);
+}
+
+function buildTraeVerificationUrl(loginHost, loginTraceId, callbackUrl, context) {
+  const url = new URL(loginHost.startsWith("http") ? loginHost : `https://${loginHost.replace(/^\/+/, "")}`);
+  url.pathname = TRAE_CONFIG.authorizationPath;
+  url.search = new URLSearchParams({
+    login_version: "1",
+    auth_from: "trae",
+    login_channel: "native_ide",
+    plugin_version: context.plugin_version,
+    auth_type: "local",
+    client_id: TRAE_CONFIG.clientId,
+    redirect: "0",
+    login_trace_id: loginTraceId,
+    auth_callback_url: callbackUrl,
+    machine_id: context.machine_id,
+    device_id: context.device_id,
+    x_device_id: context.device_id,
+    x_machine_id: context.machine_id,
+    x_device_brand: context.x_device_brand,
+    x_device_type: context.x_device_type,
+    x_os_version: context.x_os_version,
+    x_env: context.x_env,
+    x_app_version: context.x_app_version,
+    x_app_type: context.x_app_type,
+  }).toString();
+  return url.toString();
+}
+
+function parseTraeCallback(raw) {
+  const text = String(raw || "").trim();
+  let query = text;
+  if (text.includes("?")) query = text.slice(text.indexOf("?") + 1);
+  if (text.startsWith("#")) query = text.slice(1);
+  const params = Object.fromEntries(new URLSearchParams(query));
+  const pick = (keys) => {
+    for (const key of keys) {
+      const value = params[key];
+      if (value && String(value).trim()) return String(value).trim();
+    }
+    return null;
+  };
+  const error = pick(["error", "error_code", "errorCode"]);
+  if (error) {
+    const description = pick(["error_description", "error_desc", "message"]);
+    throw new Error(description ? `Trae auth failed: ${error} (${description})` : `Trae auth failed: ${error}`);
+  }
+  const refreshToken = pick(["refreshToken", "refresh_token", "RefreshToken"]);
+  if (!refreshToken) throw new Error("Trae callback missing refreshToken");
+  const cloudideToken = pick(["x-cloudide-token", "xCloudideToken", "accessToken", "access_token", "token"]);
+  return { refreshToken, cloudideToken };
+}
+
+async function fetchTraeExchangeToken(refreshToken, cloudideToken) {
+  const body = JSON.stringify({
+    ClientID: TRAE_CONFIG.clientId,
+    RefreshToken: refreshToken,
+    ClientSecret: TRAE_CONFIG.clientSecret,
+    UserID: "",
+  });
+  let lastError = "no successful response";
+  for (const origin of TRAE_CONFIG.apiOrigins) {
+    const url = `${origin.replace(/\/$/, "")}${TRAE_CONFIG.exchangeTokenPath}`;
+    try {
+      const headers = {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        "User-Agent": TRAE_CONFIG.userAgent,
+      };
+      if (cloudideToken) headers["x-cloudide-token"] = cloudideToken;
+      const response = await fetch(url, { method: "POST", headers, body });
+      const text = await response.text();
+      if (!response.ok) {
+        lastError = `${url} HTTP ${response.status}`;
+        continue;
+      }
+      let data;
+      try {
+        data = JSON.parse(text);
+      } catch {
+        lastError = `${url} invalid JSON`;
+        continue;
+      }
+      const accessToken = extractJsonPath(data, [
+        ["Result", "AccessToken"], ["Result", "accessToken"], ["result", "access_token"], ["accessToken"],
+      ]);
+      if (!accessToken) {
+        lastError = `${url} missing AccessToken`;
+        continue;
+      }
+      return {
+        accessToken,
+        refreshToken: extractJsonPath(data, [["Result", "RefreshToken"], ["result", "refresh_token"], ["refreshToken"]]) || refreshToken,
+        expiresAt: extractJsonPath(data, [["Result", "ExpiresAt"], ["Result", "expiresAt"], ["result", "expires_at"], ["expiresAt"]]),
+      };
+    } catch (error) {
+      lastError = `${url} ${error.message}`;
+    }
+  }
+  throw new Error(`Trae ExchangeToken failed: ${lastError}`);
+}
+
+async function fetchTraeUserInfo(accessToken) {
+  for (const origin of TRAE_CONFIG.apiOrigins) {
+    try {
+      const response = await fetch(`${origin.replace(/\/$/, "")}${TRAE_CONFIG.getUserInfoPath}`, {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          "User-Agent": TRAE_CONFIG.userAgent,
+          "x-cloudide-token": accessToken,
+        },
+        body: "{}",
+      });
+      if (!response.ok) continue;
+      const data = await response.json();
+      return {
+        email: extractJsonPath(data, [["Result", "NonPlainTextEmail"], ["Result", "Email"], ["Result", "email"], ["email"]]),
+        name: extractJsonPath(data, [["Result", "ScreenName"], ["Result", "Nickname"], ["Result", "Name"], ["name"]]),
+        aiRegion: extractJsonPath(data, [["Result", "AIRegion"], ["Result", "aiRegion"], ["aiRegion"]]),
+        region: extractJsonPath(data, [["Result", "Region"], ["Result", "region"], ["region"]]),
+        tenant: extractJsonPath(data, [["Result", "TenantID"], ["Result", "tenantId"], ["tenantId"]]),
+        userId: extractJsonPath(data, [["Result", "UserID"], ["Result", "userId"], ["userId"]]),
+      };
+    } catch {
+      // Try the next fixed origin.
+    }
+  }
+  return { email: null, name: null };
+}
+
+function traeScopeForRegion(aiRegion) {
+  const region = String(aiRegion || "").toLowerCase();
+  if (region === "sg" || region.includes("singapore")) return "marscode-sg";
+  if (region === "cn" || region.includes("china")) return "marscode-cn";
+  return "marscode-us";
+}
+
+const traeProvider = {
+  config: TRAE_CONFIG,
+  flowType: "authorization_code",
+  callbackPath: TRAE_CONFIG.callbackPath,
+  prepareOnExchange: false,
+  prepareConfig: async (config) => {
+    const loginTraceID = crypto.randomUUID();
+    const loginHost = await fetchTraeLoginGuidance(loginTraceID);
+    return { ...config, loginTraceID, loginHost };
+  },
+  buildAuthUrl: (config, redirectUri, state) =>
+    buildTraeVerificationUrl(config.loginHost, config.loginTraceID || state, redirectUri, buildTraeDeviceContext()),
+  exchangeToken: async (config, code) => {
+    const token = String(code || "").trim();
+    const looksLikeCallback = /[?=&]/.test(token) && (token.includes("refreshToken") || token.includes("refresh_token"));
+    if (!looksLikeCallback) {
+      const accessToken = token.replace(/^(Cloud-IDE-JWT|Bearer)\s+/i, "");
+      return { accessToken, refreshToken: null, expiresIn: TRAE_CONFIG.tokenLifetimeDays * 86400, _authMethod: "imported" };
+    }
+    const { refreshToken, cloudideToken } = parseTraeCallback(token);
+    return { ...(await fetchTraeExchangeToken(refreshToken, cloudideToken)), _authMethod: "oauth" };
+  },
+  postExchange: async (tokens) => ({ userInfo: await fetchTraeUserInfo(tokens.accessToken) }),
+  mapTokens: (tokens, extra) => {
+    let expiresIn = tokens.expiresIn;
+    if (!expiresIn && tokens.expiresAt) {
+      const absoluteSeconds = typeof tokens.expiresAt === "number"
+        ? tokens.expiresAt
+        : Date.parse(tokens.expiresAt) / 1000;
+      if (Number.isFinite(absoluteSeconds)) {
+        expiresIn = Math.max(60, absoluteSeconds - Math.floor(Date.now() / 1000));
+      }
+    }
+    if (!expiresIn) expiresIn = TRAE_CONFIG.tokenLifetimeDays * 86400;
+    const user = extra?.userInfo || {};
+    const aiRegion = user.aiRegion || "US-East";
+    return {
+      accessToken: tokens.accessToken,
+      refreshToken: tokens.refreshToken,
+      expiresIn,
+      email: user.email || undefined,
+      displayName: user.name || undefined,
+      providerSpecificData: {
+        authMethod: tokens._authMethod || "oauth",
+        aiRegion,
+        region: user.region || aiRegion,
+        tenant: user.tenant || "marscode",
+        userId: user.userId || "",
+        scope: traeScopeForRegion(aiRegion),
+        webId: "",
+        bizUserId: "",
+        userUniqueId: "",
+        appLanguage: "en",
+        appVersion: TRAE_CONFIG.defaultAppVersion,
+        userRegion: aiRegion === "SG" ? "SG" : "US",
+        userIdentity: "Free",
+      },
+    };
+  },
+};
+
+async function windsurfSeatRequest(baseUrl, path, body) {
+  const response = await fetch(`${baseUrl.replace(/\/$/, "")}${path}`, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      "User-Agent": WINDSURF_CONFIG.userAgent,
+    },
+    body: JSON.stringify(body),
+  });
+  const text = await response.text();
+  if (!response.ok) throw new Error(`Windsurf ${path} HTTP ${response.status}: ${text.slice(0, 200)}`);
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error(`Windsurf ${path} invalid JSON`);
+  }
+}
+
+function parseWindsurfCallback(raw, expectedState) {
+  const text = String(raw || "").trim();
+  let query = text;
+  if (text.includes("?")) query = text.slice(text.indexOf("?") + 1);
+  if (text.startsWith("#")) query = text.slice(1);
+  const params = Object.fromEntries(new URLSearchParams(query));
+  const accessToken = params.access_token || params.token;
+  if (!accessToken) throw new Error("Windsurf callback missing access_token");
+  if (expectedState && params.state !== expectedState) throw new Error("Windsurf callback state mismatch");
+  return { firebaseIdToken: String(accessToken).trim() };
+}
+
+async function fetchWindsurfRegisterUser(firebaseIdToken) {
+  const data = await windsurfSeatRequest(WINDSURF_CONFIG.registerApiBaseUrl, WINDSURF_CONFIG.registerPath, {
+    firebase_id_token: firebaseIdToken,
+  });
+  const apiKey = extractJsonPath(data, [["apiKey"], ["api_key"]]);
+  if (!apiKey) throw new Error("Windsurf RegisterUser missing apiKey");
+  return {
+    apiKey,
+    apiServerUrl: extractJsonPath(data, [["apiServerUrl"], ["api_server_url"]]) || WINDSURF_CONFIG.defaultApiServerUrl,
+  };
+}
+
+async function fetchWindsurfUserInfo(apiServerUrl, firebaseIdToken) {
+  try {
+    const auth = await windsurfSeatRequest(apiServerUrl, WINDSURF_CONFIG.oneTimeAuthPath, { firebaseIdToken });
+    const authToken = extractJsonPath(auth, [["authToken"], ["auth_token"]]);
+    if (!authToken) return { email: null, name: null };
+    const data = await windsurfSeatRequest(apiServerUrl, WINDSURF_CONFIG.currentUserPath, {
+      authToken,
+      includeSubscription: true,
+    });
+    const user = data.user || data;
+    return { email: user.email || null, name: user.name || null };
+  } catch {
+    return { email: null, name: null };
+  }
+}
+
+const windsurfProvider = {
+  config: WINDSURF_CONFIG,
+  flowType: "authorization_code",
+  callbackPath: WINDSURF_CONFIG.callbackPath,
+  buildAuthUrl: (config, redirectUri, state) => {
+    const params = new URLSearchParams({
+      response_type: "token",
+      client_id: config.clientId,
+      redirect_uri: redirectUri,
+      state,
+      prompt: "login",
+      redirect_parameters_type: "query",
+      workflow: "onboarding",
+    });
+    return `${config.authBaseUrl}${config.signInPath}?${params.toString()}`;
+  },
+  exchangeToken: async (config, code, redirectUri, codeVerifier, state) => {
+    const token = String(code || "").trim();
+    const looksLikeCallback = token.includes("?") || token.includes("access_token=");
+    if (!looksLikeCallback) {
+      const clean = token.replace(/^Bearer\s+/i, "");
+      if (clean.startsWith("sk-ws-")) {
+        return { accessToken: clean, refreshToken: null, expiresIn: null, apiServerUrl: config.defaultApiServerUrl, firebaseIdToken: null, _authMethod: "imported" };
+      }
+      const registration = await fetchWindsurfRegisterUser(clean);
+      return { accessToken: registration.apiKey, refreshToken: null, expiresIn: null, apiServerUrl: registration.apiServerUrl, firebaseIdToken: clean, _authMethod: "imported" };
+    }
+    const { firebaseIdToken } = parseWindsurfCallback(token, state);
+    const registration = await fetchWindsurfRegisterUser(firebaseIdToken);
+    return { accessToken: registration.apiKey, refreshToken: null, expiresIn: null, apiServerUrl: registration.apiServerUrl, firebaseIdToken, _authMethod: "oauth" };
+  },
+  postExchange: async (tokens) => ({
+    userInfo: tokens.firebaseIdToken
+      ? await fetchWindsurfUserInfo(tokens.apiServerUrl, tokens.firebaseIdToken)
+      : { email: null, name: null },
+  }),
+  mapTokens: (tokens, extra) => ({
+    accessToken: tokens.accessToken,
+    refreshToken: null,
+    expiresIn: null,
+    email: extra?.userInfo?.email || undefined,
+    displayName: extra?.userInfo?.name || undefined,
+    providerSpecificData: {
+      authMethod: tokens._authMethod || "oauth",
+      apiServerUrl: tokens.apiServerUrl,
+      firebaseIdToken: tokens.firebaseIdToken,
+    },
+  }),
+};
 
 
 function createCodeBuddyDeviceProvider(config) {
@@ -1280,6 +1645,8 @@ const PROVIDERS = {
   // CodeBuddy (Tencent) - Browser OAuth Polling Flow
   codebuddy: createCodeBuddyDeviceProvider(CODEBUDDY_CONFIG),
   "codebuddy-cn": createCodeBuddyDeviceProvider(CODEBUDDY_CN_CONFIG),
+  trae: traeProvider,
+  windsurf: windsurfProvider,
 };
 
 /**
@@ -1339,7 +1706,7 @@ export async function generateAuthData(providerName, redirectUri, meta) {
  */
 export async function exchangeTokens(providerName, code, redirectUri, codeVerifier, state, meta) {
   const provider = getProvider(providerName);
-  const config = provider.prepareConfig
+  const config = provider.prepareConfig && provider.prepareOnExchange !== false
     ? await provider.prepareConfig(provider.config, meta || {})
     : provider.config;
 

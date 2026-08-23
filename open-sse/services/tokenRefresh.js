@@ -12,6 +12,8 @@ import {
   refreshGitHubToken,
   refreshCopilotToken,
   refreshCodebuddyToken,
+  refreshTraeToken,
+  refreshWindsurfToken,
   classifyOAuthRefreshError,
 } from "./tokenRefresh/providers.js";
 
@@ -27,6 +29,8 @@ export {
   refreshGitHubToken,
   refreshCopilotToken,
   refreshCodebuddyToken,
+  refreshTraeToken,
+  refreshWindsurfToken,
   classifyOAuthRefreshError,
 };
 
@@ -130,6 +134,8 @@ const REFRESH_HANDLERS = {
   kiro: (c, log) => refreshKiroToken(c.refreshToken, c.providerSpecificData, log),
   xai: (c, log) => refreshXaiToken(c.refreshToken, log),
   "codebuddy-cn": (c, log) => refreshCodebuddyToken(c.refreshToken, log),
+  trae: (c, log) => refreshTraeToken(c.refreshToken, c, log),
+  windsurf: (c, log) => refreshWindsurfToken(c, log),
   vertex: vertexRefreshHandler,
   "vertex-partner": vertexRefreshHandler
 };

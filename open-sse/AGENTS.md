@@ -24,6 +24,7 @@
 - Preserve abort propagation, streaming order, fallback behavior, terminal errors, and usage accounting across provider paths.
 - Keep provider registry `features.usage` and `features.usageApikey` aligned with implemented usage handlers so dashboard/API eligibility matches runtime support.
 - Provider-specific usage handlers may return durable metadata patches, but credit refreshes must not overwrite authentication, activation, or gateway-state metadata owned by the provider lifecycle.
+- Keep Trae's two-step SOLO session/event transport in `executors/trae.js` and Windsurf's gRPC-web protobuf framing in `executors/windsurf.js`; neither is compatible with the default JSON/SSE executor.
 - Treat `providers/registry/index.js` as generated output; regenerate it after adding or removing registry modules.
 - Client-supplied search provider base URLs must accept only public HTTP(S) targets through `src/shared/utils/ssrfGuard.js`; admin-configured registry URLs remain the trusted default.
 - Under the root Fork Preservation Rule, keep the WYx0 `codebuddy` and `codebuddy-cn` registries, their aliases, and the CodeBuddy-aware branches in `executors/default.js` and `handlers/chatCore.js`. Upstream's `codebuddy-intl` and `tencent` entries must not shadow or replace them.

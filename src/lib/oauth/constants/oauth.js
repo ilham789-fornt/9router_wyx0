@@ -109,6 +109,59 @@ export const GITLAB_CONFIG = { ...PROVIDER_OAUTH["gitlab"] };
 export const CODEBUDDY_CONFIG = { ...PROVIDER_OAUTH["codebuddy"] };
 export const CODEBUDDY_CN_CONFIG = { ...PROVIDER_OAUTH["codebuddy-cn"] };
 
+// Trae (ByteDance marscode) browser OAuth and SOLO API defaults.
+export const TRAE_CONFIG = {
+  clientId: "ono9krqynydwx5",
+  clientSecret: "-",
+  loginGuidanceUrls: [
+    "https://api.marscode.com/cloudide/api/v3/trae/GetLoginGuidance",
+    "https://api.trae.ai/cloudide/api/v3/trae/GetLoginGuidance",
+    "https://www.trae.ai/cloudide/api/v3/trae/GetLoginGuidance",
+  ],
+  apiOrigins: [
+    "https://api.marscode.com",
+    "https://api.trae.ai",
+    "https://www.trae.ai",
+    "https://www.marscode.com",
+  ],
+  exchangeTokenPath: "/cloudide/api/v3/trae/oauth/ExchangeToken",
+  getUserInfoPath: "/cloudide/api/v3/trae/GetUserInfo",
+  authorizationPath: "/authorization",
+  callbackPath: "/callback",
+  defaultAppVersion: "3.5.54",
+  defaultAppType: "stable",
+  defaultPluginVersion: "local",
+  defaultDeviceId: "0",
+  userAgent: "Trae/1.0.0 antigravity-cockpit-tools",
+  tokenLifetimeDays: 14,
+  oauthTimeoutMs: 600_000,
+};
+
+// Windsurf browser OAuth and SeatManagement API defaults.
+export const WINDSURF_CONFIG = {
+  clientId: "3GUryQ7ldAeKEuD2obYnppsnmj58eP5u",
+  authBaseUrl: "https://www.windsurf.com",
+  signInPath: "/windsurf/signin",
+  registerApiBaseUrl: "https://register.windsurf.com",
+  registerPath: "/exa.seat_management_pb.SeatManagementService/RegisterUser",
+  oneTimeAuthPath: "/exa.seat_management_pb.SeatManagementService/GetOneTimeAuthToken",
+  currentUserPath: "/exa.seat_management_pb.SeatManagementService/GetCurrentUser",
+  defaultApiServerUrl: "https://server.codeium.com",
+  callbackPath: "/windsurf-auth-callback",
+  userAgent: "antigravity-cockpit-tools",
+  oauthTimeoutMs: 600_000,
+};
+
+// Kept ready for the separate Zed provider port; the callback proxy is already
+// hardened here, but registry/executor wiring lands with its prerequisite batch.
+export const ZED_HOSTED_CONFIG = {
+  webBaseUrl: "https://zed.dev",
+  cloudBaseUrl: "https://cloud.zed.dev",
+  llmBaseUrl: "https://cloud.zed.dev",
+  defaultNativeAppPort: 58443,
+  oauthTimeoutMs: 600_000,
+};
+
 // OAuth timeout (5 minutes)
 export const OAUTH_TIMEOUT = 300000;
 
@@ -131,4 +184,6 @@ export const PROVIDERS = {
   GITLAB: "gitlab",
   CODEBUDDY: "codebuddy",
   CODEBUDDY_CN: "codebuddy-cn",
+  TRAE: "trae",
+  WINDSURF: "windsurf",
 };

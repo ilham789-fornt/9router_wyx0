@@ -534,6 +534,63 @@ export async function refreshCodebuddyToken(refreshToken, log) {
   }, log);
 }
 
+// Trae refresh uses its ExchangeToken JSON API rather than a standard OAuth form.
+export async function refreshTraeToken(refreshToken, credentials, log) {
+  if (!refreshToken) return null;
+  const oauth = PROVIDER_OAUTH.trae || {};
+  const url = oauth.exchangeTokenUrl || oauth.tokenUrl;
+  if (!url) return null;
+
+  return dedupRefresh("trae", refreshToken, async () => {
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+          "User-Agent": "Trae/1.0.0 antigravity-cockpit-tools",
+        },
+        body: JSON.stringify({
+          ClientID: oauth.clientId || "ono9krqynydwx5",
+          RefreshToken: refreshToken,
+          ClientSecret: oauth.clientSecret || "-",
+          UserID: credentials?.providerSpecificData?.userId || "",
+        }),
+      });
+      if (!response.ok) {
+        log?.error?.("TOKEN_REFRESH", "Failed to refresh Trae token", { status: response.status });
+        return null;
+      }
+      const payload = await response.json();
+      const result = payload?.Result || payload?.result || payload;
+      const accessToken = result?.AccessToken || result?.accessToken;
+      if (!accessToken) return null;
+      const expiresAt = result?.ExpiresAt || result?.expiresAt;
+      let expiresIn;
+      if (typeof expiresAt === "number") {
+        expiresIn = Math.max(1, expiresAt - Math.floor(Date.now() / 1000));
+      } else if (typeof expiresAt === "string") {
+        const remainingMs = new Date(expiresAt).getTime() - Date.now();
+        if (remainingMs > 0) expiresIn = Math.floor(remainingMs / 1000);
+      }
+      return {
+        accessToken,
+        refreshToken: result?.RefreshToken || result?.refreshToken || refreshToken,
+        expiresIn,
+      };
+    } catch (error) {
+      log?.error?.("TOKEN_REFRESH", `Error refreshing Trae token: ${error.message}`);
+      return null;
+    }
+  }, log);
+}
+
+// Windsurf stores a long-lived API key and has no refresh-token grant.
+export async function refreshWindsurfToken(credentials, log) {
+  log?.info?.("TOKEN_REFRESH", "windsurf: API key is long-lived; skipping refresh");
+  return null;
+}
+
 export async function refreshCopilotToken(githubAccessToken, log) {
   if (!githubAccessToken) return null;
   return dedupRefresh("copilot", githubAccessToken, async () => {

@@ -5,6 +5,8 @@ import PropTypes from "prop-types";
 import { Modal, Button, Input } from "@/shared/components";
 import { useCopyToClipboard } from "@/shared/hooks/useCopyToClipboard";
 
+const PROXY_OAUTH_PROVIDERS = new Set(["trae", "windsurf"]);
+
 /**
  * OAuth Modal Component
  * - Localhost: Auto callback via popup message
@@ -150,11 +152,45 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
     setPolling(false);
   }, [provider, onSuccess]);
 
+  const startProxyFlow = useCallback(async (providerId) => {
+    const startResponse = await fetch(`/api/oauth/${providerId}/start-proxy`);
+    const startData = await startResponse.json();
+    if (!startResponse.ok || !startData.success || !startData.callbackUrl) {
+      throw new Error(startData.reason || startData.error || `Failed to start ${providerId} callback server`);
+    }
+
+    const authorizeUrl = new URL(`/api/oauth/${providerId}/authorize`, window.location.origin);
+    authorizeUrl.searchParams.set("redirect_uri", startData.callbackUrl);
+    const authResponse = await fetch(authorizeUrl);
+    const nextAuthData = await authResponse.json();
+    if (!authResponse.ok) throw new Error(nextAuthData.error);
+
+    const registerResponse = await fetch(`/api/oauth/${providerId}/register-session`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ state: nextAuthData.state }),
+    });
+    const registerData = await registerResponse.json();
+    if (!registerResponse.ok || !registerData.success) {
+      throw new Error(registerData.error || `Failed to register ${providerId} OAuth session`);
+    }
+
+    setAuthData({ ...nextAuthData, proxyProvider: providerId });
+    setStep("waiting");
+    popupRef.current = window.open(nextAuthData.authUrl, "oauth_popup", "width=600,height=700");
+    if (!popupRef.current) setStep("input");
+  }, []);
+
   // Start OAuth flow
   const startOAuthFlow = useCallback(async () => {
     if (!provider) return;
     try {
       setError(null);
+
+      if (PROXY_OAUTH_PROVIDERS.has(provider)) {
+        await startProxyFlow(provider);
+        return;
+      }
 
       // Device code flow providers
       const deviceCodeProviders = ["github", "qwen", "kiro", "kimi-coding", "kilocode", "codebuddy", "codebuddy-cn", "qoder"];
@@ -306,7 +342,7 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
       setError(err.message);
       setStep("error");
     }
-  }, [provider, isLocalhost, startPolling, oauthMeta, idcConfig]);
+  }, [provider, isLocalhost, startPolling, oauthMeta, idcConfig, startProxyFlow]);
 
   // Reset state and start OAuth when modal opens
   useEffect(() => {
@@ -330,13 +366,19 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
         fetch("/api/oauth/codex/stop-proxy").catch(() => {});
       } else if (provider === "xai") {
         fetch("/api/oauth/xai/stop-proxy").catch(() => {});
+      } else if (PROXY_OAUTH_PROVIDERS.has(provider)) {
+        fetch(`/api/oauth/${provider}/stop-proxy`).catch(() => {});
       }
     }
   }, [isOpen, provider, startOAuthFlow]);
 
   // Fixed-port server-side mode: poll status (proxy auto-exchanges + saves DB)
   useEffect(() => {
-    const pollProvider = authData?.codexServerSide ? "codex" : authData?.xaiServerSide ? "xai" : null;
+    const pollProvider = authData?.codexServerSide
+      ? "codex"
+      : authData?.xaiServerSide
+        ? "xai"
+        : authData?.proxyProvider || null;
     if (!pollProvider || !authData?.state) return;
     if (callbackProcessedRef.current) return;
     let cancelled = false;
@@ -466,6 +508,19 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
 
       const input = callbackUrl.trim();
 
+      if (PROXY_OAUTH_PROVIDERS.has(provider) && input) {
+        const response = await fetch(`/api/oauth/${provider}/exchange`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ code: input, state: authData?.state }),
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error);
+        setStep("success");
+        onSuccess?.();
+        return;
+      }
+
       // Detect raw JWT access token (starts with eyJ) — skip URL parsing
       if (input.startsWith("eyJ") && input.includes(".")) {
         await exchangeTokens(input, null);
@@ -503,6 +558,8 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
       fetch("/api/oauth/codex/stop-proxy").catch(() => {});
     } else if (provider === "xai") {
       fetch("/api/oauth/xai/stop-proxy").catch(() => {});
+    } else if (PROXY_OAUTH_PROVIDERS.has(provider)) {
+      fetch(`/api/oauth/${provider}/stop-proxy`).catch(() => {});
     }
     onClose();
   }, [onClose, provider]);
