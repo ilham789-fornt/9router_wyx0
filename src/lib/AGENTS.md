@@ -44,6 +44,8 @@
 - CodeBuddy Global human mode is opt-in job metadata: launch visible Camoufox workers with native humanization and use longer transition pauses without weakening consent, region, cancellation, or credential validation gates.
 - Bulk import cancellation must immediately finalize active accounts and prevent late browser callbacks from changing cancelled results or saving new credentials.
 - Handle corrupt, absent, and legacy data explicitly where the surrounding module supports recovery.
+- Under the root Fork Preservation Rule, `oauth/providers.js` stays the WYx0 single-file implementation. Upstream replaced it with a re-export into `oauth/providers/`; adopting that split is a deliberate refactor, never a merge side effect.
+- Keep `mergeAccountsAndProxyPoolsFromDb` in `db/index.js` so database imports merge instead of wiping user data.
 
 ## Verification
 

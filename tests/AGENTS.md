@@ -26,6 +26,7 @@
 - CodeBuddy Global bulk-login tests cover human-mode route forwarding, visible Camoufox launch options, and sanitized job metadata without exposing proxy credentials.
 - Google consent regression tests must cover localized fixed-footer controls and reject synthetic-click false positives by requiring the trusted locator path when it is available.
 - Keep live tests gated by an explicit environment variable and tolerant only of genuine credential or quota failures.
+- Fork-only test files are protected by the root Fork Preservation Rule: an upstream port may not delete one, and a suite that passes after a file disappeared is not a passing sync. Verify fork-only tests still execute, not just that the run is green.
 
 ## Verification
 
