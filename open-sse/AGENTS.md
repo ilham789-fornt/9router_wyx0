@@ -23,6 +23,7 @@
 - Keep binary AWS EventStream, protobuf ConnectRPC, and NDJSON handling in their specialized executors instead of treating them as ordinary JSON or SSE translators.
 - Preserve abort propagation, streaming order, fallback behavior, terminal errors, and usage accounting across provider paths.
 - SSE transforms must discard malformed non-JSON `data:` payloads and emit any OpenAI `[DONE]` sentinel at most once; same-format Responses streams retain that sentinel, while other translated streams may use their native terminal event plus stream close.
+- A streaming request whose upstream returns neither SSE nor JSON must stop before piping, cancel the untrusted body, and return a generic JSON error without reflecting provider HTML or text.
 - Keep provider registry `features.usage` and `features.usageApikey` aligned with implemented usage handlers so dashboard/API eligibility matches runtime support.
 - Provider-specific usage handlers may return durable metadata patches, but credit refreshes must not overwrite authentication, activation, or gateway-state metadata owned by the provider lifecycle.
 - Keep Trae's two-step SOLO transport, Windsurf's gRPC-web protobuf framing, and Zed's hosted NDJSON/RSA exchange in their specialized executors; none is compatible with the default JSON/SSE executor.

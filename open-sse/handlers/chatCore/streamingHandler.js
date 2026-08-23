@@ -43,15 +43,31 @@ function buildTransformStream({ provider, sourceFormat, targetFormat, userAgent,
 /**
  * Handle streaming response — pipe provider SSE through transform stream to client.
  */
-export function handleStreamingResponse({ providerResponse, provider, model, sourceFormat, targetFormat, userAgent, body, stream, translatedBody, finalBody, requestStartTime, connectionId, apiKey, clientRawRequest, onRequestSuccess, reqLogger, toolNameMap, streamController, onStreamComplete }) {
+export async function handleStreamingResponse({ providerResponse, provider, model, sourceFormat, targetFormat, userAgent, body, stream, translatedBody, finalBody, requestStartTime, connectionId, apiKey, clientRawRequest, onRequestSuccess, reqLogger, toolNameMap, streamController, onStreamComplete }) {
   if (onRequestSuccess) onRequestSuccess();
 
-  // Warn when upstream returns unexpected Content-Type for a streaming response.
-  // This often means the provider returned an HTML error page or plain-text error
-  // that the SSE transform stream would forward as garbage to the client.
+  // Do not feed provider HTML or plain text into the SSE parser. Besides producing
+  // an invalid client stream, that can make the Next.js response pipe fail.
   const upstreamContentType = (providerResponse.headers.get("content-type") || "").toLowerCase();
   if (upstreamContentType && !upstreamContentType.includes("text/event-stream") && !upstreamContentType.includes("application/json")) {
-    console.warn("[STREAM] " + provider + " | " + model + " | unexpected Content-Type: " + upstreamContentType);
+    const upstreamStatus = Number(providerResponse.status);
+    const status = upstreamStatus >= 400 && upstreamStatus <= 599 ? upstreamStatus : 502;
+    try { await providerResponse.body?.cancel(); } catch {}
+    console.warn(`[STREAM] ${provider} | ${model} | blocked non-SSE response (${upstreamContentType}) [${status}]`);
+    streamController?.handleError?.(new Error(`upstream non-SSE: ${status}`));
+    return {
+      success: false,
+      response: new Response(
+        JSON.stringify({ error: { message: `[${status}]: Upstream returned a non-SSE response` } }),
+        {
+          status,
+          headers: {
+            "Content-Type": "application/json",
+            "Access-Control-Allow-Origin": "*",
+          },
+        },
+      ),
+    };
   }
 
   const transformStream = buildTransformStream({ provider, sourceFormat, targetFormat, userAgent, reqLogger, toolNameMap, model, connectionId, body, onStreamComplete, apiKey });
