@@ -14,6 +14,7 @@
 
 - Keep compatibility endpoints thin: validate HTTP input, delegate to shared routing or service modules, and preserve expected status, headers, streaming, and error formats.
 - Treat provider credentials, cookies, API keys, OAuth tokens, and request logs as sensitive.
+- Never issue a dashboard session for remote authentication with the built-in default password, and redact conversation payloads from request-detail API responses.
 - Preserve Next.js server/client boundaries; add `"use client"` only where browser state or APIs require it.
 - Keep dashboard behavior aligned with the corresponding API contract and shared store.
 - Keep provider-detail bulk connection actions scoped to the selected connection IDs, and require confirmation before destructive bulk actions.

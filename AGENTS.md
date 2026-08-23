@@ -117,6 +117,7 @@ comm -23 <(git ls-tree -r --name-only HEAD | sort) \
 - Treat `JWT_SECRET`, `INITIAL_PASSWORD`, `API_KEY_SECRET`, and provider credentials as sensitive.
 - Disable verbose request logging unless actively debugging, and treat generated request logs as sensitive.
 - Production launchers must load `custom-server.js` before the Next.js listener starts; only its per-process peer token makes `x-9r-real-ip` eligible for localhost trust.
+- A fresh install using the built-in default password may authenticate locally only; remote login must fail without issuing a dashboard session until the password is configured.
 
 ## Child DOX Index
 
