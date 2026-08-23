@@ -66,4 +66,45 @@ describe("OAuth connection identity deduplication", () => {
     expect(await connectionsRepo.getProviderConnections({ provider: "kimchi" }))
       .toHaveLength(1);
   });
+
+  it("keeps same-email accounts with different workspace IDs", async () => {
+    const first = await connectionsRepo.createProviderConnection({
+      provider: "codex",
+      authType: "oauth",
+      email: "shared@example.com",
+      accessToken: "first-token",
+      providerSpecificData: { chatgptAccountId: "workspace-a" },
+    });
+    const second = await connectionsRepo.createProviderConnection({
+      provider: "codex",
+      authType: "oauth",
+      email: "shared@example.com",
+      accessToken: "second-token",
+      providerSpecificData: { chatgptAccountId: "workspace-b" },
+    });
+
+    expect(second.id).not.toBe(first.id);
+    expect(await connectionsRepo.getProviderConnections({ provider: "codex" }))
+      .toHaveLength(2);
+  });
+
+  it("does not merge a workspace identity into a bare-email account", async () => {
+    const bare = await connectionsRepo.createProviderConnection({
+      provider: "codex",
+      authType: "oauth",
+      email: "shared@example.com",
+      accessToken: "bare-token",
+    });
+    const workspace = await connectionsRepo.createProviderConnection({
+      provider: "codex",
+      authType: "oauth",
+      email: "shared@example.com",
+      accessToken: "workspace-token",
+      providerSpecificData: { chatgptAccountId: "workspace-a" },
+    });
+
+    expect(workspace.id).not.toBe(bare.id);
+    expect(await connectionsRepo.getProviderConnections({ provider: "codex" }))
+      .toHaveLength(2);
+  });
 });

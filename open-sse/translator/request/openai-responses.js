@@ -203,6 +203,18 @@ function normalizeToolParameters(params) {
   return params;
 }
 
+function instructionText(content) {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((part) => {
+      if (typeof part === "string") return part;
+      return typeof part?.text === "string" ? part.text : "";
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
 /**
  * Convert OpenAI Chat Completions to OpenAI Responses API format
  */
@@ -226,7 +238,7 @@ export function openaiToOpenAIResponsesRequest(model, body, stream, credentials)
       // Use the first instruction-bearing message as instructions.
       // OpenAI recommends role="developer" for GPT-5/Codex as the system-level prompt.
       if (!hasSystemMessage) {
-        result.instructions = typeof msg.content === "string" ? msg.content : "";
+        result.instructions = instructionText(msg.content);
         hasSystemMessage = true;
       }
       continue; // Skip instruction messages in input

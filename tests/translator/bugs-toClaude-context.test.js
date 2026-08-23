@@ -3,6 +3,7 @@ import { describe, it, expect } from "vitest";
 import "./registerAll.js";
 import { translateRequest } from "../../open-sse/translator/index.js";
 import { FORMATS } from "../../open-sse/translator/formats.js";
+import { hasValidContent } from "../../open-sse/translator/formats/claude.js";
 
 // anthropic-compatible provider so prepareClaudeRequest runs the openai→claude path
 const T = (body) =>
@@ -80,5 +81,17 @@ describe("OpenAI → Claude context mapping", () => {
     expect(out.messages[0].content).toEqual(
       expect.arrayContaining([expect.objectContaining({ type: "image" })]),
     );
+  });
+
+  it("treats a document-only Claude message as non-empty", () => {
+    expect(hasValidContent({
+      role: "user",
+      content: [
+        {
+          type: "document",
+          source: { type: "base64", media_type: "application/pdf", data: "AAAA" },
+        },
+      ],
+    })).toBe(true);
   });
 });
