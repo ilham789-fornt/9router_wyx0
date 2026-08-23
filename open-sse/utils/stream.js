@@ -103,6 +103,10 @@ export function createSSEStream(options = {}) {
           let output;
           let injectedUsage = false;
 
+          if (trimmed === "data: [DONE]") {
+            streamDoneSent = true;
+          }
+
           if (trimmed.startsWith("data:") && trimmed.slice(5).trim() !== "[DONE]") {
             try {
               const parsed = JSON.parse(trimmed.slice(5).trim());
@@ -217,11 +221,15 @@ export function createSSEStream(options = {}) {
             sseEmittedCount++;
           }
 
-          // [DONE] not emitted in translate mode — some clients' SSE decoders
-          // fail to parse the OpenAI sentinel on Claude-format translated streams.
-          // message_stop already signals end-of-response; stream close handles it.
+          // Translated Claude-style streams end with their native terminal event and
+          // stream close. Same-format Responses clients still require one [DONE].
+          if (keepsOpenAIResponsesFormat && !openAIResponsesDoneSent) {
+            const doneOutput = "data: [DONE]\n\n";
+            reqLogger?.appendConvertedChunk?.(doneOutput);
+            controller.enqueue(sharedEncoder.encode(doneOutput));
+            openAIResponsesDoneSent = true;
+          }
           streamDoneSent = true;
-          if (keepsOpenAIResponsesFormat) openAIResponsesDoneSent = true;
           continue;
         }
 
@@ -415,8 +423,12 @@ export function createSSEStream(options = {}) {
           openAIResponsesTerminalSeen = true;
         }
 
-        // [DONE] not emitted in translate mode — see comment above.
-        // Passthrough mode still emits it for standard OpenAI clients.
+        if (keepsOpenAIResponsesFormat && !openAIResponsesDoneSent) {
+          const doneOutput = "data: [DONE]\n\n";
+          reqLogger?.appendConvertedChunk?.(doneOutput);
+          controller.enqueue(sharedEncoder.encode(doneOutput));
+          openAIResponsesDoneSent = true;
+        }
 
         if (!hasValidUsage(state?.usage) && totalContentLength > 0) {
           state.usage = estimateUsage(body, totalContentLength, sourceFormat);
