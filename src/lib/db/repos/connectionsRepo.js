@@ -161,13 +161,22 @@ export async function createProviderConnection(data) {
 
     let existing = null;
     if (data.authType === "oauth" && data.email) {
-      const incomingWs = data.providerSpecificData?.chatgptAccountId;
+      const incomingEmail = normalizeIdentityValue(data.email);
+      const incomingUsername = normalizeIdentityValue(data.providerSpecificData?.username);
+      const incomingWs = normalizeIdentityValue(data.providerSpecificData?.chatgptAccountId);
       existing = all.find(c => {
-        if (c.authType !== "oauth" || c.email !== data.email) return false;
-        // If both sides have a workspace ID, they must match for dedup
-        const existingWs = c.providerSpecificData?.chatgptAccountId;
+        if (c.authType !== "oauth" || normalizeIdentityValue(c.email) !== incomingEmail) return false;
+        // Workspace providers use account ID only when both identities carry it.
+        const existingWs = normalizeIdentityValue(c.providerSpecificData?.chatgptAccountId);
         if (incomingWs && existingWs) return incomingWs === existingWs;
-        return true; // fallback: email-only match for non-workspace providers
+        if (incomingWs || existingWs) return false;
+
+        // Non-workspace providers may expose the same email through distinct IdPs.
+        // A username on only one side is evidence of a distinct identity too.
+        const existingUsername = normalizeIdentityValue(c.providerSpecificData?.username);
+        if (incomingUsername && existingUsername) return incomingUsername === existingUsername;
+        if (incomingUsername || existingUsername) return false;
+        return true;
       });
     } else if (data.authType === "apikey" && data.name && !data.skipNameDedup) {
       existing = all.find(c => c.authType === "apikey" && c.name === data.name);
