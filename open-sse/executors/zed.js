@@ -83,13 +83,11 @@ function convertProviderEvent(provider, event, state) {
 
 function createErrorChunk(model, message) {
   return {
-    id: `chatcmpl-zed-error-${Date.now()}`,
-    object: "chat.completion.chunk",
-    created: Math.floor(Date.now() / 1000),
-    model,
-    choices: [
-      { index: 0, delta: { content: `[Zed error] ${message}` }, finish_reason: "stop" },
-    ],
+    error: {
+      message: `Zed upstream error: ${message}`,
+      type: "zed_error",
+      code: "upstream_failed",
+    },
   };
 }
 
@@ -149,6 +147,13 @@ function wrapZedCompletionStream(response, provider, model) {
     done = true;
   };
 
+  const fail = (controller, message) => {
+    if (done) return;
+    enqueueSseObject(controller, encoder, createErrorChunk(model, message));
+    controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+    done = true;
+  };
+
   const processLine = (line, controller) => {
     if (done) return;
     const payload = unwrapZedLine(line);
@@ -162,8 +167,7 @@ function wrapZedCompletionStream(response, provider, model) {
       if (status?.type === "failed" || status?.failed) {
         const failed = status.failed || status;
         const message = String(failed.message || failed.error || failed.code || "request failed");
-        enqueueSseObject(controller, encoder, createErrorChunk(model, message));
-        finish(controller);
+        fail(controller, message);
       } else if (status?.type === "stream_ended" || status === "stream_ended") {
         finish(controller);
       }
@@ -301,5 +305,7 @@ class ZedExecutor extends BaseExecutor {
     return false;
   }
 }
+
+export const __test__ = { wrapZedCompletionStream };
 
 export default ZedExecutor;

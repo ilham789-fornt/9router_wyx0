@@ -12,6 +12,7 @@ import { resolveQoderModels } from "open-sse/services/qoderModels.js";
 import { resolveZedModels } from "open-sse/shared/zedAuth.js";
 import { buildCodexGatewayModelEntries } from "@/sse/services/codexGateway.js";
 import { capabilitiesFromServiceKind } from "open-sse/providers/capabilities.js";
+import { mapZedLiveModels } from "./zedModels.js";
 
 // Per-provider live model resolvers. Each receives a connection record and
 // returns { models: [{ id, name? }, ...] } | null on failure.
@@ -43,16 +44,7 @@ const LIVE_MODEL_RESOLVERS = {
       accessToken: conn.accessToken,
       providerSpecificData: conn.providerSpecificData || {},
     });
-    if (!result?.models?.length) return null;
-    return {
-      models: result.models
-        .filter((model) => !model.isDisabled)
-        .map((model) => ({
-          id: model.id,
-          name: model.name,
-          capabilities: model.supportsTools ? { tools: true } : undefined,
-        })),
-    };
+    return mapZedLiveModels(result);
   },
 };
 
