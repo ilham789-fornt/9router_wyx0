@@ -62,4 +62,23 @@ describe("OpenAI → Claude context mapping", () => {
     });
     expect(JSON.stringify(out), "remote image dropped").toContain("pic.png");
   });
+
+  it("keeps a user message whose only content is an image", () => {
+    const out = T({
+      messages: [
+        { role: "system", content: "Describe the image." },
+        {
+          role: "user",
+          content: [
+            { type: "image_url", image_url: { url: "data:image/png;base64,AAAA" } },
+          ],
+        },
+      ],
+    });
+
+    expect(out.messages.length).toBeGreaterThan(0);
+    expect(out.messages[0].content).toEqual(
+      expect.arrayContaining([expect.objectContaining({ type: "image" })]),
+    );
+  });
 });
