@@ -317,6 +317,7 @@ export function openaiToOpenAIResponsesRequest(model, body, stream, credentials)
   if (body.max_tokens !== undefined) result.max_tokens = body.max_tokens;
   if (body.top_p !== undefined) result.top_p = body.top_p;
   if (body.prompt_cache_key !== undefined) result.prompt_cache_key = body.prompt_cache_key;
+  if (body.service_tier !== undefined) result.service_tier = body.service_tier;
 
   return result;
 }
