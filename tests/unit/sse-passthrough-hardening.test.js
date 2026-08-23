@@ -24,7 +24,7 @@ async function runPassthrough(input) {
 describe("SSE passthrough hardening", () => {
   it("does not duplicate an upstream DONE sentinel", async () => {
     const output = await runPassthrough(
-      'data: {"choices":[{"delta":{"content":"ok"}}]}\n\ndata: [DONE]\n\n',
+      "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n",
     );
 
     expect(output.match(/data: \[DONE\]/g)).toHaveLength(1);
@@ -32,7 +32,7 @@ describe("SSE passthrough hardening", () => {
 
   it("does not duplicate DONE when the provider omits the final newline", async () => {
     const output = await runPassthrough(
-      'data: {"choices":[{"delta":{"content":"ok"}}]}\n\ndata: [DONE]',
+      "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]",
     );
 
     expect(output.match(/data: \[DONE\]/g)).toHaveLength(1);
