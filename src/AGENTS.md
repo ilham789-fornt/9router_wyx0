@@ -20,6 +20,7 @@
 - CodeBuddy Global GSuite bulk login may enable an explicit human mode; it opens visible Camoufox workers, enables native humanization, and adds longer pauses around Google credential and consent transitions.
 - Keep `camoufox-js` pinned to the browser-asset-compatible release; package drift can generate unsupported fingerprint properties before any provider flow starts.
 - Local-request exemptions in `dashboardGuard.js` require the socket-derived peer IP plus the per-process proof stamped by `custom-server.js`; Host-header fallback is development-only.
+- Server-side URL validation must route through `shared/utils/ssrfGuard.js`, including canonical hexadecimal IPv4-mapped IPv6 forms produced by the WHATWG `URL` parser.
 - Proxy-routed OAuth wrapping uses one visible Camoufox session, persists only sanitized proxy-pool metadata, and leaves provider endpoint selection in the provider registry.
 - Keep CodeBuddy CN account activation and gateway-probation handling in provider-local OAuth services; routes and dashboard components consume sanitized job state only.
 - CodeBuddy CN 5sim flows should preflight token, balance, stock, route capacity, and SMS login readiness before bulk registration when possible, including proxy-pool fallback for transient 5sim failures; OTP requests should go through the visible CodeBuddy UI.

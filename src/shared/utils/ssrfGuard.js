@@ -38,6 +38,18 @@ function isBlockedIpv4(host) {
 
 function isBlockedIpv6(host) {
   const h = host.replace(/^\[|\]$/g, "").toLowerCase();
+  const dottedMapped = h.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+  if (dottedMapped) return isBlockedIpv4(dottedMapped[1]);
+
+  // WHATWG URL canonicalizes a dotted mapped address such as
+  // ::ffff:127.0.0.1 to ::ffff:7f00:1 before this guard sees it.
+  const hexMapped = h.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+  if (hexMapped) {
+    const high = Number.parseInt(hexMapped[1], 16);
+    const low = Number.parseInt(hexMapped[2], 16);
+    const ipv4 = `${high >>> 8}.${high & 0xff}.${low >>> 8}.${low & 0xff}`;
+    return isBlockedIpv4(ipv4);
+  }
   if (h === "::1" || h === "::") return true;
   return h.startsWith("fe80:") || h.startsWith("fc") || h.startsWith("fd");
 }
