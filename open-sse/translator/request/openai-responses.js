@@ -238,8 +238,11 @@ export function openaiToOpenAIResponsesRequest(model, body, stream, credentials)
       // Use the first instruction-bearing message as instructions.
       // OpenAI recommends role="developer" for GPT-5/Codex as the system-level prompt.
       if (!hasSystemMessage) {
-        result.instructions = instructionText(msg.content);
-        hasSystemMessage = true;
+        const instructions = instructionText(msg.content);
+        if (instructions.trim()) {
+          result.instructions = instructions;
+          hasSystemMessage = true;
+        }
       }
       continue; // Skip instruction messages in input
     }

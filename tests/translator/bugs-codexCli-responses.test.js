@@ -79,6 +79,18 @@ describe("OpenAI → Codex Responses (reverse)", () => {
     );
   });
 
+  it("uses a later developer instruction after an empty system block", () => {
+    const out = O2R({
+      messages: [
+        { role: "system", content: [] },
+        { role: "developer", content: "Keep this instruction." },
+        { role: "user", content: "Hello" },
+      ],
+    });
+
+    expect(out.instructions).toBe("Keep this instruction.");
+  });
+
   // openai-responses.js:13 — clampCallId NOT applied on Responses→Chat; but here Chat→Responses must clamp
   it("call_id longer than 64 chars is clamped", () => {
     const longId = "call_" + "x".repeat(80);
