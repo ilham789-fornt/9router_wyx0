@@ -16,6 +16,7 @@
 - Preserve stored data compatibility and migration order; never discard user data as an incidental fix.
 - Keep secrets out of logs, responses, fixtures, and committed files.
 - Make writes resilient to partial or concurrent operations using existing repository and transaction patterns.
+- Database adapter methods accept positional parameters as arrays; the `better-sqlite3` adapter must spread those values into prepared statement calls.
 - File-backed automation snapshots use unique temporary files and Windows-safe replacement; never delete the last valid snapshot before its replacement is durable.
 - Preserve provider-connection deduplication by default; use explicit repository options when a caller intentionally supports multiple same-name API-key connections.
 - Keep environment and data-directory handling centralized rather than hard-coding platform paths.

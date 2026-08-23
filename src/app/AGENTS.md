@@ -13,6 +13,7 @@
 ## Local Contracts
 
 - Keep compatibility endpoints thin: validate HTTP input, delegate to shared routing or service modules, and preserve expected status, headers, streaming, and error formats.
+- Active LLM entries from `/v1/models` expose numeric `context_length` and `max_completion_tokens` fields, falling back to the shared capability table when live or service-kind metadata is partial.
 - Treat provider credentials, cookies, API keys, OAuth tokens, and request logs as sensitive.
 - Never issue a dashboard session for remote authentication with the built-in default password, and redact conversation payloads from request-detail API responses.
 - Preserve Next.js server/client boundaries; add `"use client"` only where browser state or APIs require it.

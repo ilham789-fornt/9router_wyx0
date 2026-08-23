@@ -22,11 +22,13 @@
 - Use OpenAI as the normal intermediate translator format, but prefer an exact source-to-target registration when the bridge would lose thinking, images, tool identifiers, error state, or wire-format details.
 - Keep binary AWS EventStream, protobuf ConnectRPC, and NDJSON handling in their specialized executors instead of treating them as ordinary JSON or SSE translators.
 - Preserve abort propagation, streaming order, fallback behavior, terminal errors, and usage accounting across provider paths.
+- SSE transforms must discard malformed non-JSON `data:` payloads and emit any OpenAI `[DONE]` sentinel at most once; translated streams may use their native terminal event plus stream close instead.
 - Keep provider registry `features.usage` and `features.usageApikey` aligned with implemented usage handlers so dashboard/API eligibility matches runtime support.
 - Provider-specific usage handlers may return durable metadata patches, but credit refreshes must not overwrite authentication, activation, or gateway-state metadata owned by the provider lifecycle.
 - Keep Trae's two-step SOLO transport, Windsurf's gRPC-web protobuf framing, and Zed's hosted NDJSON/RSA exchange in their specialized executors; none is compatible with the default JSON/SSE executor.
 - Windsurf ToolCallChunk frames must become an explicit compatibility error until their proprietary identifiers are mapped; never discard them as ordinary content or a successful terminal response.
 - Treat `providers/registry/index.js` as generated output; regenerate it after adding or removing registry modules.
+- Keep registry header keys canonical for their wire protocol; Anthropic's version header is lowercase so compatible request headers cannot create a case-variant duplicate.
 - Client-supplied search provider base URLs must accept only public HTTP(S) targets through `src/shared/utils/ssrfGuard.js`; admin-configured registry URLs remain the trusted default.
 - Under the root Fork Preservation Rule, keep the WYx0 `codebuddy` and `codebuddy-cn` registries, their aliases, and the CodeBuddy-aware branches in `executors/default.js` and `handlers/chatCore.js`. Upstream's `codebuddy-intl` and `tencent` entries must not shadow or replace them.
 - Porting the upstream `resolveTransport`/`runtimeTransport` multi-endpoint refactor requires threading the new transport through the CodeBuddy execution path first; it is not a drop-in replacement for this subtree's executor dispatch.

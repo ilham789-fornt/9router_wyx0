@@ -14,6 +14,7 @@
 - Import `registerAll.js` in tests that call translator registry APIs so Vitest does not produce false passes with an empty registry.
 - Keep normal translator tests offline and place network-backed coverage under `real/` behind `RUN_REAL=1`.
 - Preserve the `it.fails` convention for confirmed, unfixed compatibility defects and convert it to `it` when the defect is fixed.
+- Keep Gemini schema-cleanup regressions recursive so unsupported keywords nested under arrays or properties cannot reach the provider wire payload.
 
 Tests for `open-sse/translator/`. Goals: (1) data-driven coverage of every provider/model, (2) expose bugs caused by using OpenAI as the intermediate format.
 
