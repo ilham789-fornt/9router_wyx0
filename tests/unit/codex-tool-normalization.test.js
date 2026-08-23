@@ -26,6 +26,51 @@ describe("CodexExecutor tool normalization", () => {
   // adopted (it still strips those tool types during normalization). Re-add
   // this case when Wyx0's CodexExecutor is aligned with upstream.
 
+  it("preserves Responses text.format for structured outputs", () => {
+    const executor = new CodexExecutor();
+    const schema = {
+      type: "object",
+      additionalProperties: false,
+      properties: { title: { type: "string" } },
+      required: ["title"],
+    };
+    const body = {
+      model: "gpt-5.5",
+      input: [
+        {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "create a title" }],
+        },
+      ],
+      stream: true,
+      metadata: { unsupported: true },
+      text: {
+        format: {
+          type: "json_schema",
+          name: "codex_output_schema",
+          strict: true,
+          schema,
+        },
+      },
+    };
+
+    executor.transformRequest("gpt-5.5", body, true, {
+      connectionId: "test-codex-structured-output",
+      providerSpecificData: {},
+    });
+
+    expect(body.text).toEqual({
+      format: {
+        type: "json_schema",
+        name: "codex_output_schema",
+        strict: true,
+        schema,
+      },
+    });
+    expect(body.metadata).toBeUndefined();
+  });
+
   it("preserves hosted Responses tools", () => {
     const tools = normalizeTools([
       { type: "web_search", search_context_size: "medium" },
