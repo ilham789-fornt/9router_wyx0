@@ -194,6 +194,14 @@ describe("AUDIT-004: Atomic lock file for MITM startup", () => {
     expect(matches).not.toBeNull();
     expect(matches.length).toBeGreaterThanOrEqual(4);
   });
+
+  it("must not reclaim an unreadable or invalid lock owner", () => {
+    const source = fs.readFileSync(path.resolve("src/mitm/manager.js"), "utf-8");
+
+    expect(source).toContain("lock exists but its owner cannot be validated");
+    expect(source).toContain("lock contains an invalid owner PID");
+    expect(source).not.toContain("catch { stale = true; }");
+  });
 });
 
 // ============================================================

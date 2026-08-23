@@ -218,7 +218,7 @@ export function grpcWebFrame(payload) {
 // ─── Protobuf response decoder ───────────────────────────────────────────────
 // CompletionChunk (oneof):
 //   field 1 → ContentChunk { field 1: string text }
-//   field 2 → ToolCallChunk (skipped)
+//   field 2 → ToolCallChunk (reported as an explicit unsupported error)
 //   field 3 → DoneChunk    { field 1: UsageStats{ field1: prompt, field2: completion } }
 //   field 4 → ErrorChunk   { field 1: string message }
 
@@ -325,6 +325,11 @@ export function decodeCompletionChunk(buf) {
       if (fieldNum === 1) {
         const text = decodeStringField(payload, 1);
         if (text !== null) return { kind: "content", text };
+      } else if (fieldNum === 2) {
+        // The proprietary ToolCallChunk schema is not yet mapped to OpenAI tool
+        // identifiers. Never discard it silently: terminate with an explicit
+        // compatibility error so callers can fall back to another provider.
+        return { kind: "unsupported_tool_call" };
       } else if (fieldNum === 3) {
         const usage = decodeDoneChunk(payload);
         return { kind: "done", promptTokens: usage[0], completionTokens: usage[1] };
@@ -332,7 +337,6 @@ export function decodeCompletionChunk(buf) {
         const msg = decodeStringField(payload, 1);
         return { kind: "error", message: msg ?? "unknown windsurf error" };
       }
-      // field 2 = ToolCallChunk — not yet handled; skip
     } else if (wireType === 0) {
       let v;
       [v, offset] = readVarint(buf, offset);
@@ -489,6 +493,8 @@ export class WindsurfExecutor extends BaseExecutor {
               completionTokens = chunk.completionTokens;
             } else if (chunk.kind === "error") {
               hadError = chunk.message;
+            } else if (chunk.kind === "unsupported_tool_call") {
+              hadError = "Windsurf returned a tool call that cannot yet be translated safely";
             }
           };
 

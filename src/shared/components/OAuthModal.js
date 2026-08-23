@@ -5,7 +5,7 @@ import PropTypes from "prop-types";
 import { Modal, Button, Input } from "@/shared/components";
 import { useCopyToClipboard } from "@/shared/hooks/useCopyToClipboard";
 
-const PROXY_OAUTH_PROVIDERS = new Set(["trae", "windsurf"]);
+const PROXY_OAUTH_PROVIDERS = new Set(["trae", "windsurf", "zed"]);
 
 /**
  * OAuth Modal Component
@@ -165,10 +165,12 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
     const nextAuthData = await authResponse.json();
     if (!authResponse.ok) throw new Error(nextAuthData.error);
 
+    const registerBody = { state: nextAuthData.state };
+    if (nextAuthData.codeVerifier) registerBody.codeVerifier = nextAuthData.codeVerifier;
     const registerResponse = await fetch(`/api/oauth/${providerId}/register-session`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ state: nextAuthData.state }),
+      body: JSON.stringify(registerBody),
     });
     const registerData = await registerResponse.json();
     if (!registerResponse.ok || !registerData.success) {
@@ -512,7 +514,11 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
         const response = await fetch(`/api/oauth/${provider}/exchange`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ code: input, state: authData?.state }),
+          body: JSON.stringify({
+            code: input,
+            state: authData?.state,
+            codeVerifier: authData?.codeVerifier,
+          }),
         });
         const data = await response.json();
         if (!response.ok) throw new Error(data.error);

@@ -98,6 +98,7 @@ import p93 from "./youcom.js";
 import p94 from "./gemini-web.js";
 import p96 from "./trae.js";
 import p97 from "./windsurf.js";
+import p98 from "./zed.js";
 
 export default [
   p0,
@@ -198,5 +199,6 @@ export default [
   p93,
   p94,
   p96,
-  p97
+  p97,
+  p98
 ];

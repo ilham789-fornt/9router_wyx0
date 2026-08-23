@@ -14,6 +14,7 @@ import {
   refreshCodebuddyToken,
   refreshTraeToken,
   refreshWindsurfToken,
+  refreshZedToken,
   classifyOAuthRefreshError,
 } from "./tokenRefresh/providers.js";
 
@@ -31,6 +32,7 @@ export {
   refreshCodebuddyToken,
   refreshTraeToken,
   refreshWindsurfToken,
+  refreshZedToken,
   classifyOAuthRefreshError,
 };
 
@@ -136,6 +138,7 @@ const REFRESH_HANDLERS = {
   "codebuddy-cn": (c, log) => refreshCodebuddyToken(c.refreshToken, log),
   trae: (c, log) => refreshTraeToken(c.refreshToken, c, log),
   windsurf: (c, log) => refreshWindsurfToken(c, log),
+  zed: () => refreshZedToken(),
   vertex: vertexRefreshHandler,
   "vertex-partner": vertexRefreshHandler
 };

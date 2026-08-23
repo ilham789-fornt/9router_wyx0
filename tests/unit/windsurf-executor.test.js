@@ -145,6 +145,12 @@ describe("decodeCompletionChunk", () => {
     expect(decoded).toEqual({ kind: "error", message: "quota exhausted" });
   });
 
+  it("surfaces ToolCallChunk instead of silently discarding tool identifiers", () => {
+    const chunk = encodeLenField(2, encodeStringField(1, "tool-call"));
+
+    expect(decodeCompletionChunk(chunk)).toEqual({ kind: "unsupported_tool_call" });
+  });
+
   it("decodes a DoneChunk (field 3 → UsageStats with prompt/completion tokens)", () => {
     // UsageStats: field 1 = prompt_tokens (varint), field 2 = completion_tokens (varint)
     const usage = new Uint8Array([...encodeVarint((1 << 3) | 0), ...encodeVarint(42), ...encodeVarint((2 << 3) | 0), ...encodeVarint(99)]);

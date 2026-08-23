@@ -9,6 +9,7 @@ import { getProviderConnections, getCombos, getCustomModels, getModelAliases } f
 import { getDisabledModels } from "@/lib/disabledModelsDb";
 import { resolveKiroModels } from "open-sse/services/kiroModels.js";
 import { resolveQoderModels } from "open-sse/services/qoderModels.js";
+import { resolveZedModels } from "open-sse/shared/zedAuth.js";
 import { buildCodexGatewayModelEntries } from "@/sse/services/codexGateway.js";
 import { capabilitiesFromServiceKind } from "open-sse/providers/capabilities.js";
 
@@ -36,7 +37,23 @@ const LIVE_MODEL_RESOLVERS = {
     return {
       models: result.models.map((m) => ({ id: m.id, name: m.name })),
     };
-  }
+  },
+  zed: async (conn) => {
+    const result = await resolveZedModels({
+      accessToken: conn.accessToken,
+      providerSpecificData: conn.providerSpecificData || {},
+    });
+    if (!result?.models?.length) return null;
+    return {
+      models: result.models
+        .filter((model) => !model.isDisabled)
+        .map((model) => ({
+          id: model.id,
+          name: model.name,
+          capabilities: model.supportsTools ? { tools: true } : undefined,
+        })),
+    };
+  },
 };
 
 const parseOpenAIStyleModels = (data) => {

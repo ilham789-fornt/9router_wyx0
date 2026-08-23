@@ -591,6 +591,11 @@ export async function refreshWindsurfToken(credentials, log) {
   return null;
 }
 
+// Zed's RSA-decrypted access token is long-lived and has no refresh grant.
+export function refreshZedToken() {
+  return null;
+}
+
 export async function refreshCopilotToken(githubAccessToken, log) {
   if (!githubAccessToken) return null;
   return dedupRefresh("copilot", githubAccessToken, async () => {

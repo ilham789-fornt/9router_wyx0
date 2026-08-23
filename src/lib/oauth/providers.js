@@ -28,6 +28,7 @@ import {
   CODEBUDDY_CN_CONFIG,
   TRAE_CONFIG,
   WINDSURF_CONFIG,
+  ZED_HOSTED_CONFIG,
   getOAuthClientMetadata,
 } from "./constants/oauth";
 import { XAI_CONFIG, XAI_PKCE_VERIFIER_BYTES } from "./constants/xai";
@@ -38,6 +39,13 @@ import {
   extractCodexAccountInfo,
   fetchKiroProfileArn,
 } from "./providerHelpers";
+import {
+  createZedNativeAuthData,
+  decryptZedAccessToken,
+  fetchZedAuthenticatedUser,
+  parseZedCallbackPayload,
+  resolveZedOrganizationId,
+} from "open-sse/shared/zedAuth.js";
 
 export { extractCodexAccountInfo, fetchKiroProfileArn };
 
@@ -352,9 +360,21 @@ async function fetchWindsurfRegisterUser(firebaseIdToken) {
   });
   const apiKey = extractJsonPath(data, [["apiKey"], ["api_key"]]);
   if (!apiKey) throw new Error("Windsurf RegisterUser missing apiKey");
+  const candidateApiServerUrl = extractJsonPath(data, [["apiServerUrl"], ["api_server_url"]])
+    || WINDSURF_CONFIG.defaultApiServerUrl;
+  let apiServerUrl;
+  try {
+    const parsed = new URL(candidateApiServerUrl);
+    if (parsed.protocol !== "https:" || !WINDSURF_CONFIG.apiOrigins.includes(parsed.origin)) {
+      throw new Error("origin is not allowlisted");
+    }
+    apiServerUrl = parsed.origin;
+  } catch {
+    throw new Error("Windsurf RegisterUser returned an untrusted apiServerUrl");
+  }
   return {
     apiKey,
-    apiServerUrl: extractJsonPath(data, [["apiServerUrl"], ["api_server_url"]]) || WINDSURF_CONFIG.defaultApiServerUrl,
+    apiServerUrl,
   };
 }
 
@@ -420,6 +440,53 @@ const windsurfProvider = {
       authMethod: tokens._authMethod || "oauth",
       apiServerUrl: tokens.apiServerUrl,
       firebaseIdToken: tokens.firebaseIdToken,
+    },
+  }),
+};
+
+const zedProvider = {
+  config: ZED_HOSTED_CONFIG,
+  flowType: "authorization_code",
+  callbackPath: "/",
+  prepareOnExchange: false,
+  prepareConfig: async (config, meta) => {
+    const nativeAppPort = Number(meta?.nativeAppPort) || config.defaultNativeAppPort;
+    return { ...config, ...createZedNativeAuthData(config, { nativeAppPort }) };
+  },
+  buildAuthUrl: (config) => config.authUrl,
+  exchangeToken: async (config, code, redirectUri, codeVerifier, state) => {
+    const { userId, encryptedAccessToken } = parseZedCallbackPayload(code);
+    const accessToken = decryptZedAccessToken(encryptedAccessToken, codeVerifier);
+    return { accessToken, userId, systemId: state };
+  },
+  postExchange: async (tokens) => {
+    const credentials = {
+      accessToken: tokens.accessToken,
+      providerSpecificData: { userId: tokens.userId, systemId: tokens.systemId },
+    };
+    let userInfo = null;
+    try {
+      userInfo = await fetchZedAuthenticatedUser(credentials, { config: ZED_HOSTED_CONFIG });
+    } catch {
+      // Identity enrichment is best-effort; the decrypted credential remains usable.
+    }
+    return {
+      organizationId: resolveZedOrganizationId(credentials, userInfo),
+      email: userInfo?.email || null,
+      name: userInfo?.name || userInfo?.display_name || null,
+    };
+  },
+  mapTokens: (tokens, extra) => ({
+    accessToken: tokens.accessToken,
+    refreshToken: null,
+    expiresIn: null,
+    email: extra?.email || undefined,
+    displayName: extra?.name || undefined,
+    providerSpecificData: {
+      authMethod: "oauth",
+      userId: tokens.userId,
+      systemId: tokens.systemId,
+      organizationId: extra?.organizationId || "",
     },
   }),
 };
@@ -1647,6 +1714,7 @@ const PROVIDERS = {
   "codebuddy-cn": createCodeBuddyDeviceProvider(CODEBUDDY_CN_CONFIG),
   trae: traeProvider,
   windsurf: windsurfProvider,
+  zed: zedProvider,
 };
 
 /**
@@ -1676,7 +1744,9 @@ export async function generateAuthData(providerName, redirectUri, meta) {
   const config = provider.prepareConfig
     ? await provider.prepareConfig(provider.config, meta || {})
     : provider.config;
-  const { codeVerifier, codeChallenge, state } = generatePKCE(provider.pkceVerifierBytes);
+  const { codeVerifier: pkceVerifier, codeChallenge, state: pkceState } = generatePKCE(provider.pkceVerifierBytes);
+  const state = config.loginTraceID || config.systemId || pkceState;
+  const codeVerifier = config.privateKeyVerifier || pkceVerifier;
 
   let authUrl;
   if (provider.flowType === "device_code") {

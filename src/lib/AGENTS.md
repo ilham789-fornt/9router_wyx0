@@ -28,7 +28,7 @@
 
 - Use existing repository, normalization, and provider service APIs before reaching directly into storage.
 - Keep provider-specific token fields and refresh rules in provider-local services.
-- Keep Trae and Windsurf definitions inside the protected single-file `oauth/providers.js`; callback exchange may contact only their fixed HTTPS API origins, and callback proxies bind loopback and validate browser state where the provider returns it.
+- Keep Trae, Windsurf, and Zed definitions inside the protected single-file `oauth/providers.js`; callback exchange may contact only fixed HTTPS API origins, and callback proxies bind loopback and validate state or an RSA-bound credential before persistence.
 - Keep browser automation, session scraping, and bulk account import flows inside provider-local OAuth services rather than route handlers or dashboard components.
 - Provider bulk import managers should clear provider-specific interstitials, modals, and login gates before deciding a browser session is stuck or needs manual assist.
 - Provider automation must use isolated Camoufox sessions; bulk workers run headless and close only the affected worker context after callback capture while retaining redirect-header and navigation-event fallbacks.

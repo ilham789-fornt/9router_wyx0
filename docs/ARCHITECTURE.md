@@ -1,6 +1,6 @@
 # 9Router Architecture
 
-_Last updated: 2026-02-06_
+_Last updated: 2026-08-23_
 
 ## Executive Summary
 
@@ -61,7 +61,7 @@ flowchart LR
     end
 
     subgraph Upstreams[Upstream Providers]
-        P1[OAuth Providers\nClaude/Codex/Gemini/Qwen/iFlow/GitHub/Kiro/Cursor/Antigravity]
+        P1[OAuth Providers\nClaude/Codex/Gemini/Kiro/CodeBuddy/Trae/Windsurf/Zed]
         P2[API Key Providers\nOpenAI/Anthropic/OpenRouter/GLM/Kimi/MiniMax]
         P3[Compatible Nodes\nOpenAI-compatible / Anthropic-compatible]
     end
@@ -153,6 +153,8 @@ Usage DB:
 - API key generation/verification: `src/shared/utils/apiKey.js`
 - Provider secrets persisted in `providerConnections` entries
 - Optional proxy support for upstream calls via env proxy variables (`open-sse/utils/proxyFetch.js`)
+- Production-local trust: `custom-server.js` replaces spoofable forwarding headers with the socket peer and a per-process proof verified by `src/lib/auth/trustedPeer.js`; Host fallback is development-only.
+- Fresh installs never issue a remote dashboard session for the built-in default password, and request-detail APIs redact stored conversation payloads.
 
 ## 5) Cloud Sync
 
@@ -270,6 +272,8 @@ sequenceDiagram
 ```
 
 Refresh during live traffic is executed inside `open-sse/handlers/chatCore.js` via executor `refreshCredentials()`.
+
+Trae, Windsurf, and Zed use provider-scoped loopback callback proxies rather than the shared `/callback` page. The route starts the proxy, registers state (plus Zed's RSA private-key verifier in a POST body), opens provider login, polls sanitized status, and closes the listener after exchange. Trae exchanges only against fixed MarsCode/Trae HTTPS origins; Windsurf accepts only allowlisted API-server origins returned by registration; Zed decrypts its callback token locally before requesting a short-lived hosted-LLM token.
 
 ## Cloud Sync Lifecycle (Enable / Sync / Disable)
 
@@ -457,6 +461,10 @@ Specialized executors:
 - `kiro`
 - `codex`
 - `cursor`
+- `codebuddy-cn`
+- `trae` (SOLO session + event stream)
+- `windsurf` (gRPC-web protobuf)
+- `zed` (RSA credential + hosted NDJSON stream)
 
 Default executor path:
 

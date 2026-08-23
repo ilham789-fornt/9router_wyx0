@@ -3,6 +3,7 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { createRequire } from "node:module";
 import http from "node:http";
+import fs from "node:fs";
 import { __test__ as requestDetails } from "@/lib/db/repos/requestDetailsRepo.js";
 
 const require = createRequire(import.meta.url);
@@ -31,6 +32,14 @@ async function get(headers = {}) {
 }
 
 describe("custom-server peer header sanitizing", () => {
+  it("keeps the packaged CLI fail-closed when the wrapper is absent", () => {
+    const cliSource = fs.readFileSync(new URL("../../cli/cli.js", import.meta.url), "utf8");
+
+    expect(cliSource).toContain("const serverPath = customServerPath");
+    expect(cliSource).not.toContain("? customServerPath");
+    expect(cliSource).toContain("custom-server.js and server.js are required");
+  });
+
   it("generates a peer trust token at boot", () => {
     expect(process.env.NINEROUTER_PEER_TOKEN).toMatch(/^[0-9a-f]{48}$/);
   });

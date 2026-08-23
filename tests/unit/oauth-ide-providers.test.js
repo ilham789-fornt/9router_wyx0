@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { publicEncrypt, constants as cryptoConstants } from "node:crypto";
 
 import {
   exchangeTokens,
@@ -17,6 +18,10 @@ import {
   stopTraeProxy,
   stopWindsurfProxy,
 } from "../../src/lib/oauth/utils/server.js";
+import {
+  createZedNativeAuthData,
+  decryptZedAccessToken,
+} from "../../open-sse/shared/zedAuth.js";
 
 afterEach(() => {
   stopTraeProxy();
@@ -32,7 +37,30 @@ describe("Trae and Windsurf provider integration", () => {
       "codebuddy-cn",
       "trae",
       "windsurf",
+      "zed",
     ]));
+  });
+
+  it("keeps the Zed RSA verifier and system id bound to one authorization", async () => {
+    const auth = await generateAuthData("zed", "http://127.0.0.1:58443/");
+    const url = new URL(auth.authUrl);
+
+    expect(auth.codeVerifier).toMatch(/^zed-rsa-pkcs1:/);
+    expect(auth.state).toBe(url.searchParams.get("system_id"));
+    expect(url.searchParams.get("native_app_port")).toBe("58443");
+  });
+
+  it("decrypts a Zed callback token with the generated private verifier", () => {
+    const auth = createZedNativeAuthData({}, { nativeAppPort: 58443 });
+    const encrypted = publicEncrypt({
+      key: Buffer.from(auth.publicKey, "base64url"),
+      format: "der",
+      type: "pkcs1",
+      padding: cryptoConstants.RSA_PKCS1_OAEP_PADDING,
+      oaepHash: "sha256",
+    }, Buffer.from("zed-secret-token"));
+
+    expect(decryptZedAccessToken(encrypted.toString("base64url"), auth.privateKeyVerifier)).toBe("zed-secret-token");
   });
 
   it("builds a state-bound Windsurf browser URL", async () => {
@@ -53,6 +81,25 @@ describe("Trae and Windsurf provider integration", () => {
     expect(windsurf.accessToken).toBe("sk-ws-test-key");
     expect(windsurf.providerSpecificData.authMethod).toBe("imported");
   });
+
+  it("rejects a callback-supplied Windsurf API origin outside the HTTPS allowlist", async () => {
+    const originalFetch = global.fetch;
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      text: async () => JSON.stringify({
+        apiKey: "sk-ws-attacker",
+        apiServerUrl: "http://127.0.0.1:8080",
+      }),
+    });
+
+    try {
+      await expect(exchangeTokens("windsurf", "firebase-jwt-value")).rejects.toThrow("untrusted apiServerUrl");
+      expect(global.fetch).toHaveBeenCalledOnce();
+      expect(global.fetch.mock.calls[0][0]).toContain("https://register.windsurf.com/");
+    } finally {
+      global.fetch = originalFetch;
+    }
+  });
 });
 
 describe("IDE callback proxy hardening", () => {
@@ -67,12 +114,28 @@ describe("IDE callback proxy hardening", () => {
     const proxy = await startTraeProxy();
     registerTraeSession({ state: "expected-state" });
 
-    const response = await fetch(`${proxy.callbackUrl}?refreshToken=attacker-token`, {
+    const callback = new URL(proxy.callbackUrl);
+    callback.searchParams.set("refreshToken", "attacker-token");
+
+    const response = await fetch(callback, {
       headers: { Origin: "https://attacker.example" },
     });
 
     expect(response.status).toBe(403);
     expect(await response.text()).toContain("Cross-origin callback rejected");
+  });
+
+  it("rejects a Trae callback that does not retain its callback state", async () => {
+    const proxy = await startTraeProxy();
+    registerTraeSession({ state: "polling-state" });
+    const callback = new URL(proxy.callbackUrl);
+    callback.searchParams.set("state", "wrong-state");
+    callback.searchParams.set("refreshToken", "attacker-token");
+
+    const response = await fetch(callback);
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain("Trae callback state mismatch");
   });
 
   it("rejects a Windsurf callback with a mismatched state", async () => {

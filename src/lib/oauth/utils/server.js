@@ -1,5 +1,6 @@
 import http from "http";
 import { URL } from "url";
+import { randomUUID } from "node:crypto";
 import { CODEX_CONFIG, TRAE_CONFIG, WINDSURF_CONFIG, ZED_HOSTED_CONFIG } from "../constants/oauth.js";
 
 // Loopback origin guard for local callback proxies.
@@ -449,6 +450,14 @@ let traeProxyServer = null;
 let traeProxyTimeout = null;
 let traeProxyPort = null;
 let traeSession = null;
+let traeCallbackState = null;
+
+function getTraeCallbackUrl() {
+  if (!traeProxyPort || !traeCallbackState) return null;
+  const callback = new URL(`http://127.0.0.1:${traeProxyPort}${TRAE_CONFIG.callbackPath}`);
+  callback.searchParams.set("state", traeCallbackState);
+  return callback.toString();
+}
 
 export function registerTraeSession({ state }) {
   if (!state) return false;
@@ -467,9 +476,10 @@ export function clearTraeSession(state) {
 export function startTraeProxy() {
   return new Promise((resolve) => {
     if (traeProxyServer) {
-      resolve({ success: true, port: traeProxyPort, callbackUrl: `http://127.0.0.1:${traeProxyPort}${TRAE_CONFIG.callbackPath}` });
+      resolve({ success: true, port: traeProxyPort, callbackUrl: getTraeCallbackUrl() });
       return;
     }
+    traeCallbackState = randomUUID();
     const server = http.createServer(async (req, res) => {
       const url = new URL(req.url, "http://localhost");
       if (url.pathname !== TRAE_CONFIG.callbackPath && url.pathname !== "/auth/callback") {
@@ -483,15 +493,15 @@ export function startTraeProxy() {
         res.end(renderCodexResultPage(false, "No active Trae login session"));
         return;
       }
-      // Anti-CSRF: reject cross-origin fetches (legit redirects send no Origin),
-      // and reject state mismatch when state is present.
+      // Anti-CSRF: reject cross-origin fetches and require the unguessable state
+      // embedded in the callback URL before the browser leaves for Trae.
       if (!isLoopbackOrigin(req.headers.origin)) {
         res.writeHead(403, { "Content-Type": "text/html; charset=utf-8" });
         res.end(renderCodexResultPage(false, "Cross-origin callback rejected"));
         return;
       }
       const cbState = url.searchParams.get("state");
-      if (cbState && session.state && cbState !== session.state) {
+      if (!cbState || cbState !== traeCallbackState) {
         session.status = "error";
         session.error = "Trae callback state mismatch";
         res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
@@ -532,7 +542,7 @@ export function startTraeProxy() {
       traeProxyServer = server;
       traeProxyPort = server.address().port;
       traeProxyTimeout = setTimeout(() => stopTraeProxy(), TRAE_CONFIG.oauthTimeoutMs);
-      resolve({ success: true, port: traeProxyPort, callbackUrl: `http://127.0.0.1:${traeProxyPort}${TRAE_CONFIG.callbackPath}` });
+      resolve({ success: true, port: traeProxyPort, callbackUrl: getTraeCallbackUrl() });
     });
     server.on("error", (err) => resolve({ success: false, reason: err.message }));
   });
@@ -542,6 +552,7 @@ export function stopTraeProxy() {
   if (traeProxyTimeout) { clearTimeout(traeProxyTimeout); traeProxyTimeout = null; }
   if (traeProxyServer) { traeProxyServer.close(); traeProxyServer = null; }
   traeProxyPort = null;
+  traeCallbackState = null;
 }
 
 // ───────────────────────────────────────────────────────────────────────────

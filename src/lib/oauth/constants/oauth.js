@@ -147,6 +147,10 @@ export const WINDSURF_CONFIG = {
   oneTimeAuthPath: "/exa.seat_management_pb.SeatManagementService/GetOneTimeAuthToken",
   currentUserPath: "/exa.seat_management_pb.SeatManagementService/GetCurrentUser",
   defaultApiServerUrl: "https://server.codeium.com",
+  apiOrigins: [
+    "https://server.codeium.com",
+    "https://server.self-serve.windsurf.com",
+  ],
   callbackPath: "/windsurf-auth-callback",
   userAgent: "antigravity-cockpit-tools",
   oauthTimeoutMs: 600_000,
@@ -186,4 +190,5 @@ export const PROVIDERS = {
   CODEBUDDY_CN: "codebuddy-cn",
   TRAE: "trae",
   WINDSURF: "windsurf",
+  ZED: "zed",
 };

@@ -486,15 +486,15 @@ function openBrowser(url) {
 }
 
 // Find standalone server (bundled in bin/app for published package).
-// Prefer custom-server.js (injects real socket IP) when present.
+// custom-server.js is mandatory: it injects the socket-derived peer proof used
+// by dashboard/API local-request policy.
 const standaloneDir = path.join(__dirname, "app");
 const customServerPath = path.join(standaloneDir, "custom-server.js");
-const serverPath = fs.existsSync(customServerPath)
-  ? customServerPath
-  : path.join(standaloneDir, "server.js");
+const standaloneServerPath = path.join(standaloneDir, "server.js");
+const serverPath = customServerPath;
 
-if (!fs.existsSync(serverPath)) {
-  console.error("Error: Standalone build not found.");
+if (!fs.existsSync(customServerPath) || !fs.existsSync(standaloneServerPath)) {
+  console.error("Error: Secure standalone build not found (custom-server.js and server.js are required).");
   console.error("Please run 'npm run build:cli' first.");
   process.exit(1);
 }
