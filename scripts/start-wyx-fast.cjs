@@ -5,6 +5,7 @@ const path = require("node:path");
 const projectRoot = path.resolve(__dirname, "..");
 const envPath = path.join(projectRoot, ".env");
 const standaloneDir = path.join(projectRoot, "cli", "app");
+const customServerPath = path.join(standaloneDir, "custom-server.js");
 const serverPath = path.join(standaloneDir, "server.js");
 
 function parseEnvValue(value) {
@@ -45,9 +46,10 @@ process.env.NEXT_PUBLIC_BASE_URL = process.env.NEXT_PUBLIC_BASE_URL || `http://$
 
 fs.mkdirSync(process.env.DATA_DIR, { recursive: true });
 
-if (!fs.existsSync(serverPath)) {
+if (!fs.existsSync(serverPath) || !fs.existsSync(customServerPath)) {
   console.error("Fast WYx0 bundle not found:");
-  console.error(`  ${serverPath}`);
+  console.error(`  expected ${serverPath}`);
+  console.error(`  expected ${customServerPath}`);
   console.error("Run this once from the project root:");
   console.error("  node cli/scripts/build-cli.js");
   process.exit(1);
@@ -60,4 +62,5 @@ console.log(`   Data dir:  ${process.env.DATA_DIR}`);
 console.log("");
 
 process.chdir(standaloneDir);
+require(customServerPath);
 require(serverPath);

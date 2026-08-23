@@ -22,4 +22,8 @@ function ensureLinkedDir(source, destination) {
 ensureLinkedDir(path.join(projectRoot, ".next", "static"), path.join(standaloneRoot, ".next", "static"));
 ensureLinkedDir(path.join(projectRoot, "public"), path.join(standaloneRoot, "public"));
 
+// Install the socket-derived peer-header wrapper before the standalone server
+// creates its HTTP listener. Requiring it is side-effect-only unless it is the
+// process entrypoint, so server.js remains controlled by this launcher.
+require(path.join(projectRoot, "custom-server.js"));
 require(path.join(standaloneRoot, "server.js"));

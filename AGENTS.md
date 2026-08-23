@@ -116,6 +116,7 @@ comm -23 <(git ls-tree -r --name-only HEAD | sort) \
 - Copy `.env.example` to `.env` for local setup; never commit real tokens, cookies, or exported local data.
 - Treat `JWT_SECRET`, `INITIAL_PASSWORD`, `API_KEY_SECRET`, and provider credentials as sensitive.
 - Disable verbose request logging unless actively debugging, and treat generated request logs as sensitive.
+- Production launchers must load `custom-server.js` before the Next.js listener starts; only its per-process peer token makes `x-9r-real-ip` eligible for localhost trust.
 
 ## Child DOX Index
 

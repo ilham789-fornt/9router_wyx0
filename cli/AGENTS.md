@@ -18,6 +18,7 @@
 - Keep runtime data and lazily installed native dependencies outside the globally installed package as established by the package comments.
 - Avoid interactive prompts when explicit CLI flags already provide the needed value.
 - Keep startup, browser opening, updates, tray behavior, and shutdown predictable in both interactive and headless use.
+- Treat `custom-server.js` as a required package artifact and start through it so socket-derived peer headers cannot be spoofed; packaging must fail when the wrapper is absent.
 
 ## Work Guidance
 

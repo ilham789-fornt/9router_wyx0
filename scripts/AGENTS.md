@@ -19,6 +19,7 @@
 - Keep script side effects explicit, especially writes to build output, local runtime data, translated docs, or environment-derived paths.
 - Do not embed secrets, machine-specific absolute paths, or provider credentials.
 - Keep package scripts in `package.json` aligned with renamed, moved, or newly required files.
+- Production and fast-runtime startup scripts must install `custom-server.js` before loading a standalone `server.js`; fail rather than silently starting an unwrapped listener.
 
 ## Work Guidance
 
