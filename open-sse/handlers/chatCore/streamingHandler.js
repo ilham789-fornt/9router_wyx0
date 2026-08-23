@@ -41,6 +41,138 @@ function buildTransformStream({ provider, sourceFormat, targetFormat, userAgent,
   return createPassthroughStreamWithLogger(provider, reqLogger, model, connectionId, body, onStreamComplete, apiKey);
 }
 
+function createTransformedBody({
+  providerResponse,
+  provider,
+  model,
+  sourceFormat,
+  targetFormat,
+  userAgent,
+  body,
+  connectionId,
+  apiKey,
+  reqLogger,
+  toolNameMap,
+  streamController,
+  onStreamComplete,
+}) {
+  const transformStream = buildTransformStream({
+    provider,
+    sourceFormat,
+    targetFormat,
+    userAgent,
+    reqLogger,
+    toolNameMap,
+    model,
+    connectionId,
+    body,
+    onStreamComplete,
+    apiKey,
+  });
+  const isResponsesPassthrough = sourceFormat === FORMATS.OPENAI_RESPONSES && targetFormat === FORMATS.OPENAI_RESPONSES;
+  const onAbortTerminal = isResponsesPassthrough ? buildAbortedResponsesTerminalBytes : null;
+  const stallTimeoutMs = PROVIDERS[provider]?.stallTimeoutMs || STREAM_STALL_TIMEOUT_MS;
+  return pipeWithDisconnect(providerResponse, transformStream, streamController, onAbortTerminal, stallTimeoutMs);
+}
+
+function isTinyCodeBuddyCompletion(contentObj, usage) {
+  const contentLength = (contentObj?.content || "").trim().length;
+  const thinkingLength = (contentObj?.thinking || "").trim().length;
+  const outputTokens = Number(
+    usage?.completion_tokens ?? usage?.output_tokens ?? usage?.completionTokens ?? 0
+  );
+  return contentLength + thinkingLength <= 40 && outputTokens > 0 && outputTokens <= 10;
+}
+
+async function drainReadable(readable) {
+  const reader = readable.getReader();
+  const chunks = [];
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return chunks;
+}
+
+function replayChunks(chunks, streamController) {
+  return new ReadableStream({
+    start(controller) {
+      for (const chunk of chunks) controller.enqueue(chunk);
+      streamController.handleComplete?.();
+      controller.close();
+    },
+  });
+}
+
+function createProbeStreamController(streamController) {
+  return {
+    signal: streamController.signal,
+    startTime: streamController.startTime,
+    isConnected: () => streamController.isConnected?.() ?? true,
+    handleComplete: () => {},
+    handleError: (error) => streamController.handleError?.(error),
+    handleDisconnect: (reason) => streamController.handleDisconnect?.(reason),
+    abort: () => streamController.abort?.(),
+  };
+}
+
+async function buildCodeBuddyRetryingBody(options) {
+  let completion = null;
+  const probeOptions = {
+    ...options,
+    streamController: createProbeStreamController(options.streamController),
+  };
+  const captureComplete = (contentObj, usage, ttftAt) => {
+    completion = { contentObj, usage, ttftAt };
+  };
+  const firstBody = createTransformedBody({
+    ...probeOptions,
+    onStreamComplete: captureComplete,
+  });
+  const firstChunks = await drainReadable(firstBody);
+  const replayFirst = () => {
+    options.onStreamComplete?.(completion?.contentObj, completion?.usage, completion?.ttftAt);
+    return replayChunks(firstChunks, options.streamController);
+  };
+
+  if (!isTinyCodeBuddyCompletion(completion?.contentObj, completion?.usage)) {
+    return replayFirst();
+  }
+
+  console.log(
+    `[CodeBuddy] Tiny streaming completion detected; retrying once | model=${options.model} | out=${completion?.usage?.completion_tokens ?? "?"} | chars=${(completion?.contentObj?.content || "").trim().length}`
+  );
+  let retryResult;
+  try {
+    retryResult = await options.retryProviderResponse();
+  } catch (error) {
+    console.warn(`[CodeBuddy] Tiny completion retry failed; returning the original stream: ${error?.message || error}`);
+    return replayFirst();
+  }
+  const retryResponse = retryResult?.response;
+  const retryContentType = (retryResponse?.headers?.get("content-type") || "").toLowerCase();
+  if (!retryResponse?.body || !retryResponse.ok || !retryContentType.includes("text/event-stream")) {
+    try { await retryResponse?.body?.cancel(); } catch {}
+    console.warn("[CodeBuddy] Tiny completion retry returned an invalid stream; returning the original response");
+    return replayFirst();
+  }
+
+  completion = null;
+  const secondBody = createTransformedBody({
+    ...probeOptions,
+    providerResponse: retryResponse,
+    onStreamComplete: captureComplete,
+  });
+  const secondChunks = await drainReadable(secondBody);
+  options.onStreamComplete?.(completion?.contentObj, completion?.usage, completion?.ttftAt);
+  return replayChunks(secondChunks, options.streamController);
+}
+
 /**
  * Handle streaming response — pipe provider SSE through transform stream to client.
  */
@@ -59,13 +191,24 @@ export async function handleStreamingResponse({ providerResponse, provider, mode
 
   if (onRequestSuccess) onRequestSuccess();
 
-  const transformStream = buildTransformStream({ provider, sourceFormat, targetFormat, userAgent, reqLogger, toolNameMap, model, connectionId, body, onStreamComplete, apiKey });
-
-  // Responses passthrough: synthesize response.failed + [DONE] if the stream aborts/stalls before a terminal event
-  const isResponsesPassthrough = sourceFormat === FORMATS.OPENAI_RESPONSES && targetFormat === FORMATS.OPENAI_RESPONSES;
-  const onAbortTerminal = isResponsesPassthrough ? buildAbortedResponsesTerminalBytes : null;
-  const stallTimeoutMs = PROVIDERS[provider]?.stallTimeoutMs || STREAM_STALL_TIMEOUT_MS;
-  const transformedBody = pipeWithDisconnect(providerResponse, transformStream, streamController, onAbortTerminal, stallTimeoutMs);
+  const streamOptions = {
+    providerResponse,
+    provider,
+    model,
+    sourceFormat,
+    targetFormat,
+    userAgent,
+    body,
+    connectionId,
+    apiKey,
+    reqLogger,
+    toolNameMap,
+    streamController,
+    onStreamComplete,
+  };
+  const transformedBody = provider === "codebuddy" && retryProviderResponse
+    ? await buildCodeBuddyRetryingBody({ ...streamOptions, retryProviderResponse })
+    : createTransformedBody(streamOptions);
 
   saveRequestDetail(buildRequestDetail({
     provider, model, connectionId,

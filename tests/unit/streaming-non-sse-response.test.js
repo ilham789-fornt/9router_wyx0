@@ -1,7 +1,59 @@
 import { describe, expect, it, vi } from "vitest";
 
+const usageDbMocks = vi.hoisted(() => ({
+  appendRequestLog: vi.fn(() => Promise.resolve()),
+  saveRequestDetail: vi.fn(() => Promise.resolve()),
+  saveRequestUsage: vi.fn(() => Promise.resolve()),
+  trackPendingRequest: vi.fn(),
+}));
+
+vi.mock("@/lib/usageDb.js", () => usageDbMocks);
+
 import { FORMATS } from "../../open-sse/translator/formats.js";
-import { handleStreamingResponse } from "../../open-sse/handlers/chatCore/streamingHandler.js";
+import {
+  buildOnStreamComplete,
+  handleStreamingResponse,
+} from "../../open-sse/handlers/chatCore/streamingHandler.js";
+
+function openAIStreamResponse(content, completionTokens) {
+  const chunks = [
+    {
+      id: "chatcmpl-test",
+      object: "chat.completion.chunk",
+      created: 1,
+      model: "codebuddy-model",
+      choices: [{ index: 0, delta: { content }, finish_reason: null }],
+    },
+    {
+      id: "chatcmpl-test",
+      object: "chat.completion.chunk",
+      created: 1,
+      model: "codebuddy-model",
+      choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+      usage: {
+        prompt_tokens: 20,
+        completion_tokens: completionTokens,
+        total_tokens: 20 + completionTokens,
+      },
+    },
+  ];
+  const payload = `${chunks.map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`).join("")}data: [DONE]\n\n`;
+  return new Response(payload, {
+    headers: { "Content-Type": "text/event-stream" },
+  });
+}
+
+function streamController() {
+  return {
+    signal: new AbortController().signal,
+    startTime: Date.now(),
+    isConnected: () => true,
+    handleComplete: vi.fn(),
+    handleError: vi.fn(),
+    handleDisconnect: vi.fn(),
+    abort: vi.fn(),
+  };
+}
 
 describe("streaming upstream content type", () => {
   it("returns a generic JSON error instead of piping provider HTML", async () => {
@@ -66,5 +118,99 @@ describe("streaming upstream content type", () => {
 
     expect(result.success).toBe(false);
     expect(result.status).toBe(502);
+  });
+});
+
+describe("CodeBuddy streaming preservation", () => {
+  it("retries a tiny completion before exposing bytes to the client", async () => {
+    usageDbMocks.saveRequestDetail.mockClear();
+    usageDbMocks.saveRequestUsage.mockClear();
+    const controller = streamController();
+    const retryProviderResponse = vi.fn().mockResolvedValue({
+      response: openAIStreamResponse("This is the complete retried answer.", 12),
+    });
+    const requestStartTime = Date.now();
+    const { onStreamComplete, streamDetailId } = buildOnStreamComplete({
+      provider: "codebuddy",
+      model: "codebuddy-model",
+      connectionId: "connection-a",
+      requestStartTime,
+      body: { messages: [] },
+      stream: true,
+    });
+
+    const result = await handleStreamingResponse({
+      providerResponse: openAIStreamResponse("Short", 2),
+      provider: "codebuddy",
+      model: "codebuddy-model",
+      sourceFormat: FORMATS.OPENAI,
+      targetFormat: FORMATS.OPENAI,
+      body: { messages: [] },
+      stream: true,
+      requestStartTime,
+      streamController: controller,
+      onStreamComplete,
+      streamDetailId,
+      retryProviderResponse,
+    });
+    const responseText = await result.response.text();
+
+    expect(retryProviderResponse).toHaveBeenCalledOnce();
+    expect(responseText).toContain("This is the complete retried answer.");
+    expect(responseText).not.toContain("Short");
+    expect(controller.handleComplete).toHaveBeenCalledOnce();
+    expect(usageDbMocks.saveRequestDetail).toHaveBeenCalledTimes(2);
+    const detailIds = usageDbMocks.saveRequestDetail.mock.calls.map(([detail]) => detail.id);
+    expect(new Set(detailIds)).toEqual(new Set([streamDetailId]));
+  });
+
+  it("does not retry a normal completion", async () => {
+    const retryProviderResponse = vi.fn();
+    const result = await handleStreamingResponse({
+      providerResponse: openAIStreamResponse("A normal response that is already complete.", 12),
+      provider: "codebuddy",
+      model: "codebuddy-model",
+      sourceFormat: FORMATS.OPENAI,
+      targetFormat: FORMATS.OPENAI,
+      body: { messages: [] },
+      stream: true,
+      requestStartTime: Date.now(),
+      streamController: streamController(),
+      onStreamComplete: vi.fn(),
+      streamDetailId: "detail-normal",
+      retryProviderResponse,
+    });
+
+    expect(await result.response.text()).toContain("A normal response that is already complete.");
+    expect(retryProviderResponse).not.toHaveBeenCalled();
+  });
+
+  it("returns the buffered original when the retry is not an SSE success", async () => {
+    const retryProviderResponse = vi.fn().mockResolvedValue({
+      response: new Response("provider maintenance", {
+        status: 503,
+        headers: { "Content-Type": "text/plain" },
+      }),
+    });
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const result = await handleStreamingResponse({
+      providerResponse: openAIStreamResponse("Short", 2),
+      provider: "codebuddy",
+      model: "codebuddy-model",
+      sourceFormat: FORMATS.OPENAI,
+      targetFormat: FORMATS.OPENAI,
+      body: { messages: [] },
+      stream: true,
+      requestStartTime: Date.now(),
+      streamController: streamController(),
+      onStreamComplete: vi.fn(),
+      streamDetailId: "detail-retry-fallback",
+      retryProviderResponse,
+    });
+
+    expect(await result.response.text()).toContain("Short");
+    expect(retryProviderResponse).toHaveBeenCalledOnce();
+    expect(warnSpy).toHaveBeenCalledOnce();
+    warnSpy.mockRestore();
   });
 });
