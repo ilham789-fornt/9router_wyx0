@@ -30,6 +30,14 @@ describe("SSE passthrough hardening", () => {
     expect(output.match(/data: \[DONE\]/g)).toHaveLength(1);
   });
 
+  it("does not duplicate DONE when the provider omits the final newline", async () => {
+    const output = await runPassthrough(
+      'data: {"choices":[{"delta":{"content":"ok"}}]}\n\ndata: [DONE]',
+    );
+
+    expect(output.match(/data: \[DONE\]/g)).toHaveLength(1);
+  });
+
   it("drops malformed non-JSON data payloads", async () => {
     const output = await runPassthrough("data: upstream gateway failure\n\n");
 

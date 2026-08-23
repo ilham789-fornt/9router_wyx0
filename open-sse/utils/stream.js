@@ -102,8 +102,10 @@ export function createSSEStream(options = {}) {
         if (mode === STREAM_MODE.PASSTHROUGH) {
           let output;
           let injectedUsage = false;
+          const isDoneLine = trimmed.startsWith("data:")
+            && trimmed.slice(5).trim() === "[DONE]";
 
-          if (trimmed === "data: [DONE]") {
+          if (isDoneLine) {
             streamDoneSent = true;
           }
 
@@ -337,11 +339,25 @@ export function createSSEStream(options = {}) {
         if (mode === STREAM_MODE.PASSTHROUGH) {
           if (buffer) {
             let output = buffer;
-            if (buffer.startsWith("data:") && !buffer.startsWith("data: ")) {
+            const trimmedBuffer = buffer.trim();
+            const isDataLine = trimmedBuffer.startsWith("data:");
+            const dataPayload = isDataLine ? trimmedBuffer.slice(5).trim() : "";
+            if (dataPayload === "[DONE]") {
+              streamDoneSent = true;
+            } else if (isDataLine) {
+              try {
+                JSON.parse(dataPayload);
+              } catch {
+                output = null;
+              }
+            }
+            if (output && buffer.startsWith("data:") && !buffer.startsWith("data: ")) {
               output = "data: " + buffer.slice(5);
             }
-            reqLogger?.appendConvertedChunk?.(output);
-            controller.enqueue(sharedEncoder.encode(output));
+            if (output) {
+              reqLogger?.appendConvertedChunk?.(output);
+              controller.enqueue(sharedEncoder.encode(output));
+            }
           }
 
           if (!hasValidUsage(usage) && totalContentLength > 0) {
