@@ -4,7 +4,7 @@ WYx0 fork of 9Router focused on provider automation, multi-account workflows, an
 
 This repository is forked from [decolua/9router](https://github.com/decolua/9router). The upstream project remains the base AI router. This fork documents and ships the WYx0 changes on top: Kiro automation, CodeBuddy automation, quota tracker upgrades, and small dashboard quality-of-life updates.
 
-This branch tracks upstream 9Router with general parity through `v0.5.8` plus the security/OAuth hardening batch from `v0.5.55`, while preserving WYx0 automation. See **Upstream Synchronization Status** below for the per-batch port log and deferred items.
+This branch tracks upstream 9Router with general parity through `v0.5.8` plus reviewed security, compatibility, translator, identity, and usage fixes from `v0.5.55`, while preserving WYx0 automation. See **Upstream Synchronization Status** below for the per-batch port log and deferred items.
 
 ## Focus
 
@@ -149,7 +149,7 @@ This fork's current PR scope is intentionally centered on WYx0 changes:
 
 ## Upstream Synchronization Status
 
-Last general sync: **upstream `v0.5.8` (`0c47c891`)**. Security/OAuth hardening is ported through **upstream `v0.5.55` (`699edac3`)**. Sync method: selective per-commit cherry-pick/manual port onto the WYx0 line (not a wholesale merge), preserving all WYx0-only features.
+Last general sync: **upstream `v0.5.8` (`0c47c891`)**. Reviewed security, compatibility, translator, identity, and usage fixes are ported through **upstream `v0.5.55` (`699edac3`)**. Sync method: selective per-commit cherry-pick/manual port onto the WYx0 line (not a wholesale merge), preserving all WYx0-only features.
 
 ### Security/OAuth batch from upstream v0.5.55
 
@@ -159,6 +159,15 @@ Last general sync: **upstream `v0.5.8` (`0c47c891`)**. Security/OAuth hardening 
 - Outbound proxy schemes, OAuth callback HTML, and MITM startup locking are hardened, including stale-owner recovery only after the recorded process is confirmed dead.
 - Trae, Windsurf, and Zed use specialized executors and loopback callback proxies while retaining WYx0's single-file OAuth provider implementation and both `codebuddy` identities.
 - Verification: production build green; focused security/provider coverage green; the full suite retains the exact pre-batch baseline of 20 failing files and 34 failed assertions, with no protected fork-only file removed.
+
+### Compatibility, identity, and usage batches from upstream v0.5.55
+
+- Hardened SSE parsing and terminal behavior, Responses tool calls, prompt cache keys, service tiers, model token limits, Gemini schema cleanup, Anthropic header casing, and SQLite array binding.
+- Preserved image/document-only Claude messages, developer instructions, Codex `text.format`, and bare function tools while removing client-only Responses metadata.
+- Prevented OAuth imports from collapsing distinct workspace identities and added exact embedding-token persistence.
+- Preserved cached-token totals through forced SSE-to-JSON responses, deduplicated streaming request-detail rows, and removed duplicate low-level streaming usage writes.
+- Repaired WYx0's protected CodeBuddy tiny-completion retry after collision reconstruction found its callback was still supplied but no longer consumed; the retry again buffers before client flush and safely falls back to the original stream.
+- Verification for each completed batch: focused regressions and production build green; full-suite failing-file and assertion sets unchanged; no protected fork-only file removed.
 
 ### Ported from upstream v0.5.4 → v0.5.8
 
@@ -190,6 +199,9 @@ Last general sync: **upstream `v0.5.8` (`0c47c891`)**. Security/OAuth hardening 
 - **Generic token-refresh profile refactor** from the Trae/Windsurf/Zed OAuth series. The new providers use WYx0's existing refresh module; folding Claude/Qwen/iFlow/GitHub/Kimi into the upstream profile table remains a separate isolated refactor.
 - **`codebuddy-intl`, `workbuddy`, and Tencent overlap.** Upstream identities are intentionally not registered because they collide with WYx0's richer `codebuddy` and `codebuddy-cn` implementations. Any later delta must be compared manually without alias shadowing.
 - **Headroom proxy lifecycle + Docker sidecar** (`b55cf36d`, `50ed79fe`). Bundled with a deeper architectural change (`resolveTransport` multi-endpoint + `runtimeTransport` in executors) that conflicts with WYx0's CodeBuddy-aware `default.js`/`chatCore.js`. Porting requires threading `runtimeTransport` into WYx0's executor without breaking CodeBuddy auth + the working chat path, then manual verification of several providers.
+- **Headroom Responses history hardening** (`373850ee`). The target `open-sse/rtk/headroom.js` module is absent until the deferred Headroom lifecycle lands, so this patch has no safe target yet.
+- **Rotating refresh-token retry wrapper** (`aa0448f7`). Its stated `grok-cli` OAuth path is absent here, while WYx0's current `xai` registry uses the API-key path and is not registered in `DefaultExecutor.refreshCredentials`; port only with the provider lifecycle that can exercise it.
+- **Native Gemini URL path guard** (`f46811c7`). The affected upstream route constructs a native upstream URL directly; WYx0's corresponding route does not, so there is no equivalent vulnerable path to patch.
 - **Upstream CodeBuddy CN provider base** (`efd20be8`) and the `cbcn` alias baseline (`791705ae`). WYx0 already ships a richer CN impl; only the quota handler was ported (above). The base provider registry + alias were intentionally kept as WYx0's.
 - **API-key management UI / endpoint page refactor** (`25e8723a`) and **custom-models-by-provider-scope** (`707a9155`). Both touch heavily-diverged dashboard files (`EndpointPageClient.js`, `providerCustomModels.js`); defer until those panels are reconciled.
 

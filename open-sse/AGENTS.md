@@ -22,6 +22,9 @@
 - Use OpenAI as the normal intermediate translator format, but prefer an exact source-to-target registration when the bridge would lose thinking, images, tool identifiers, error state, or wire-format details.
 - Keep binary AWS EventStream, protobuf ConnectRPC, and NDJSON handling in their specialized executors instead of treating them as ordinary JSON or SSE translators.
 - Preserve abort propagation, streaming order, fallback behavior, terminal errors, and usage accounting across provider paths.
+- Streaming usage has one persistence owner: completion handlers call `saveUsageStats`; low-level `logUsage` must not create duplicate usage-history or request-log rows.
+- A streaming request-detail placeholder and its completion update must share one ID so persistence updates the row instead of appending a duplicate.
+- Forced SSE-to-JSON conversion must include cache-read and cache-creation input tokens in client-visible prompt totals and request details.
 - SSE transforms must discard malformed non-JSON `data:` payloads and emit any OpenAI `[DONE]` sentinel at most once; same-format Responses streams retain that sentinel, while other translated streams may use their native terminal event plus stream close.
 - A streaming request whose upstream returns neither SSE nor JSON must stop before piping, cancel the untrusted body, and return a generic JSON error without reflecting provider HTML or text.
 - Keep provider registry `features.usage` and `features.usageApikey` aligned with implemented usage handlers so dashboard/API eligibility matches runtime support.
@@ -33,6 +36,7 @@
 - Keep registry header keys canonical for their wire protocol; Anthropic's version header is lowercase so compatible request headers cannot create a case-variant duplicate.
 - Client-supplied search provider base URLs must accept only public HTTP(S) targets through `src/shared/utils/ssrfGuard.js`; admin-configured registry URLs remain the trusted default.
 - Under the root Fork Preservation Rule, keep the WYx0 `codebuddy` and `codebuddy-cn` registries, their aliases, and the CodeBuddy-aware branches in `executors/default.js` and `handlers/chatCore.js`. Upstream's `codebuddy-intl` and `tencent` entries must not shadow or replace them.
+- CodeBuddy streaming may buffer a first tiny non-empty completion and retry once before exposing bytes; if the retry fails or is not a successful SSE response, replay the original buffered stream.
 - Porting the upstream `resolveTransport`/`runtimeTransport` multi-endpoint refactor requires threading the new transport through the CodeBuddy execution path first; it is not a drop-in replacement for this subtree's executor dispatch.
 
 ## Work Guidance

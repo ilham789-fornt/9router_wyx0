@@ -16,6 +16,7 @@
 - Keep combo fallback and account fallback ordering deterministic.
 - Delegate provider execution and format translation to `open-sse`; do not duplicate executor logic here.
 - Keep usage and request-detail recording consistent across streaming and non-streaming responses.
+- Persist embedding usage only when the provider reports an exact positive input-token total with zero output tokens; do not store estimates or malformed counters as exact usage.
 - Treat routing, retries, cooldowns, and terminal errors as user-visible behavior requiring focused tests.
 
 ## Work Guidance
