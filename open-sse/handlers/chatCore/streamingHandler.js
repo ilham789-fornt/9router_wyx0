@@ -55,6 +55,7 @@ function createTransformedBody({
   toolNameMap,
   streamController,
   onStreamComplete,
+  bufferedProbe = false,
 }) {
   const transformStream = buildTransformStream({
     provider,
@@ -69,6 +70,9 @@ function createTransformedBody({
     onStreamComplete,
     apiKey,
   });
+  if (bufferedProbe) {
+    return providerResponse.body.pipeThrough(transformStream);
+  }
   const isResponsesPassthrough = sourceFormat === FORMATS.OPENAI_RESPONSES && targetFormat === FORMATS.OPENAI_RESPONSES;
   const onAbortTerminal = isResponsesPassthrough ? buildAbortedResponsesTerminalBytes : null;
   const stallTimeoutMs = PROVIDERS[provider]?.stallTimeoutMs || STREAM_STALL_TIMEOUT_MS;
@@ -84,18 +88,34 @@ function isTinyCodeBuddyCompletion(contentObj, usage) {
   return contentLength + thinkingLength <= 40 && outputTokens > 0 && outputTokens <= 10;
 }
 
-async function drainReadable(readable) {
+async function readWithTimeout(reader, timeoutMs) {
+  if (!timeoutMs) return reader.read();
+  let timeoutId;
+  try {
+    return await Promise.race([
+      reader.read(),
+      new Promise((_, reject) => {
+        timeoutId = setTimeout(() => reject(new Error("stream stall timeout")), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
+}
+
+async function drainReadable(readable, stallTimeoutMs) {
   const reader = readable.getReader();
   const chunks = [];
   let error = null;
   try {
     while (true) {
-      const { done, value } = await reader.read();
+      const { done, value } = await readWithTimeout(reader, stallTimeoutMs);
       if (done) break;
       chunks.push(value);
     }
   } catch (caught) {
     error = caught;
+    try { await reader.cancel(caught); } catch {}
   } finally {
     reader.releaseLock();
   }
@@ -112,34 +132,17 @@ function replayChunks(chunks, streamController) {
   });
 }
 
-function createProbeStreamController(streamController, onError) {
-  return {
-    signal: streamController.signal,
-    startTime: streamController.startTime,
-    isConnected: () => streamController.isConnected?.() ?? true,
-    handleComplete: () => {},
-    handleError: onError,
-    handleDisconnect: (reason) => onError(new Error(String(reason || "probe disconnected"))),
-    abort: () => streamController.abort?.(),
-  };
-}
-
 async function buildCodeBuddyRetryingBody(options) {
   let completion = null;
-  let probeError = null;
-  const makeProbeOptions = () => ({
-    ...options,
-    streamController: createProbeStreamController(options.streamController, (error) => {
-      probeError ||= error;
-    }),
-  });
+  const stallTimeoutMs = PROVIDERS[options.provider]?.stallTimeoutMs || STREAM_STALL_TIMEOUT_MS;
   const firstBody = createTransformedBody({
-    ...makeProbeOptions(),
+    ...options,
+    bufferedProbe: true,
     onStreamComplete: (contentObj, usage, ttftAt) => {
       completion = { contentObj, usage, ttftAt };
     },
   });
-  const firstDrain = await drainReadable(firstBody);
+  const firstDrain = await drainReadable(firstBody, stallTimeoutMs);
   const firstChunks = firstDrain.chunks;
   const firstCompletion = completion;
   const replayFirst = () => {
@@ -151,8 +154,8 @@ async function buildCodeBuddyRetryingBody(options) {
     return replayChunks(firstChunks, options.streamController);
   };
 
-  if (firstDrain.error || probeError) {
-    console.warn(`[CodeBuddy] Initial buffered stream ended early; returning captured bytes: ${(firstDrain.error || probeError)?.message || "unknown error"}`);
+  if (firstDrain.error) {
+    console.warn(`[CodeBuddy] Initial buffered stream ended early; returning captured bytes: ${firstDrain.error?.message || "unknown error"}`);
     return replayFirst();
   }
 
@@ -179,23 +182,23 @@ async function buildCodeBuddyRetryingBody(options) {
   }
 
   completion = null;
-  probeError = null;
   let secondDrain;
   try {
     const secondBody = createTransformedBody({
-      ...makeProbeOptions(),
+      ...options,
       providerResponse: retryResponse,
+      bufferedProbe: true,
       onStreamComplete: (contentObj, usage, ttftAt) => {
         completion = { contentObj, usage, ttftAt };
       },
     });
-    secondDrain = await drainReadable(secondBody);
+    secondDrain = await drainReadable(secondBody, stallTimeoutMs);
   } catch (error) {
     console.warn(`[CodeBuddy] Tiny completion retry stream failed; returning the original response: ${error?.message || error}`);
     return replayFirst();
   }
-  if (secondDrain.error || probeError || !completion) {
-    const retryError = secondDrain.error || probeError;
+  if (secondDrain.error || !completion) {
+    const retryError = secondDrain.error;
     console.warn(`[CodeBuddy] Tiny completion retry stream ended early; returning the original response: ${retryError?.message || "missing terminal completion"}`);
     return replayFirst();
   }

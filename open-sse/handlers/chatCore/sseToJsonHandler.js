@@ -35,16 +35,19 @@ function pickAssistantMessageForChatCompletion(output) {
 }
 
 function extractCacheTokens(usage) {
+  const topLevelCacheRead = usage.cache_read_input_tokens ?? usage.cached_tokens;
+  const topLevelCacheCreate = usage.cache_creation_input_tokens;
   return {
-    cacheRead: usage.cache_read_input_tokens
-      ?? usage.cached_tokens
+    cacheRead: topLevelCacheRead
       ?? usage.input_tokens_details?.cached_tokens
       ?? usage.prompt_tokens_details?.cached_tokens
       ?? 0,
-    cacheCreate: usage.cache_creation_input_tokens
+    cacheCreate: topLevelCacheCreate
       ?? usage.input_tokens_details?.cache_creation_tokens
       ?? usage.prompt_tokens_details?.cache_creation_tokens
       ?? 0,
+    additionalCacheRead: topLevelCacheRead ?? 0,
+    additionalCacheCreate: topLevelCacheCreate ?? 0,
   };
 }
 
@@ -139,13 +142,18 @@ export async function handleForcedSSEToJson({ providerResponse, sourceFormat, pr
       const usage = jsonResponse.usage || {};
       appendLog({ tokens: usage, status: "200 OK" });
       saveUsageStats({ provider, model, tokens: usage, connectionId, apiKey, endpoint: clientRawRequest?.endpoint });
-      const { cacheRead, cacheCreate } = extractCacheTokens(usage);
+      const {
+        cacheRead,
+        cacheCreate,
+        additionalCacheRead,
+        additionalCacheCreate,
+      } = extractCacheTokens(usage);
 
       // Same cache-inclusive total for the recorded detail, so the DB and the
       // client-facing usage can never disagree.
       const inTokensForLog = (usage.input_tokens || 0)
-        + cacheRead
-        + cacheCreate;
+        + additionalCacheRead
+        + additionalCacheCreate;
       const { msgItem, textContent } = pickAssistantMessageForChatCompletion(jsonResponse.output);
       const totalLatency = Date.now() - requestStartTime;
 
@@ -163,12 +171,10 @@ export async function handleForcedSSEToJson({ providerResponse, sourceFormat, pr
       }
 
       // Build client-format response.
-      // input_tokens EXCLUDES cached tokens on cache-capable upstreams, so summing
-      // only input+output under-reports prompt_tokens — measured: 2012 reported
-      // where the real prompt was ~5344 with 5332 served from cache. Fold the cache
-      // counters in, and keep them visible in prompt_tokens_details so a client can
-      // tell a cache hit from a small prompt.
-      const inTokens = (usage.input_tokens || 0) + cacheRead + cacheCreate;
+      // Some upstreams report cache counters as top-level values excluded from
+      // input_tokens; standard Responses nested details are already included.
+      // Add only top-level counters, while preserving either shape as metadata.
+      const inTokens = (usage.input_tokens || 0) + additionalCacheRead + additionalCacheCreate;
       const outTokens = usage.output_tokens || 0;
       const cacheDetails = (cacheRead > 0 || cacheCreate > 0)
         ? { prompt_tokens_details: {

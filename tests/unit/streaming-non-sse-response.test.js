@@ -10,6 +10,7 @@ const usageDbMocks = vi.hoisted(() => ({
 vi.mock("@/lib/usageDb.js", () => usageDbMocks);
 
 import { FORMATS } from "../../open-sse/translator/formats.js";
+import { PROVIDERS } from "../../open-sse/config/providers.js";
 import {
   buildOnStreamComplete,
   handleStreamingResponse,
@@ -254,5 +255,51 @@ describe("CodeBuddy streaming preservation", () => {
     expect(controller.handleError).not.toHaveBeenCalled();
     expect(warnSpy).toHaveBeenCalledOnce();
     warnSpy.mockRestore();
+  });
+
+  it("cancels only a stalled retry probe before replaying the original", async () => {
+    const originalStallTimeout = PROVIDERS.codebuddy.stallTimeoutMs;
+    PROVIDERS.codebuddy.stallTimeoutMs = 10;
+    let retryCancelled = false;
+    const retryBody = new ReadableStream({
+      cancel() {
+        retryCancelled = true;
+      },
+    });
+    const retryProviderResponse = vi.fn().mockResolvedValue({
+      response: new Response(retryBody, {
+        status: 200,
+        headers: { "Content-Type": "text/event-stream" },
+      }),
+    });
+    const controller = streamController();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      const result = await handleStreamingResponse({
+        providerResponse: openAIStreamResponse("Short", 2),
+        provider: "codebuddy",
+        model: "codebuddy-model",
+        sourceFormat: FORMATS.OPENAI,
+        targetFormat: FORMATS.OPENAI,
+        body: { messages: [] },
+        stream: true,
+        requestStartTime: Date.now(),
+        streamController: controller,
+        onStreamComplete: vi.fn(),
+        streamDetailId: "detail-retry-stall-fallback",
+        retryProviderResponse,
+      });
+
+      expect(await result.response.text()).toContain("Short");
+      expect(retryCancelled).toBe(true);
+      expect(controller.abort).not.toHaveBeenCalled();
+      expect(controller.handleError).not.toHaveBeenCalled();
+      expect(warnSpy).toHaveBeenCalledOnce();
+    } finally {
+      if (originalStallTimeout === undefined) delete PROVIDERS.codebuddy.stallTimeoutMs;
+      else PROVIDERS.codebuddy.stallTimeoutMs = originalStallTimeout;
+      warnSpy.mockRestore();
+    }
   });
 });

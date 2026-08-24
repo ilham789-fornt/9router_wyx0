@@ -100,6 +100,56 @@ describe("upstream usage accounting regressions", () => {
     }));
   });
 
+  it("does not add nested Responses cache details to input_tokens twice", async () => {
+    const result = await handleForcedSSEToJson({
+      providerResponse: responsesStream([
+        {
+          event: "response.output_item.done",
+          data: {
+            output_index: 0,
+            item: {
+              type: "message",
+              role: "assistant",
+              content: [{ type: "output_text", text: "standard cached answer" }],
+            },
+          },
+        },
+        {
+          event: "response.completed",
+          data: {
+            response: {
+              usage: {
+                input_tokens: 100,
+                output_tokens: 10,
+                total_tokens: 110,
+                input_tokens_details: { cached_tokens: 80 },
+              },
+            },
+          },
+        },
+      ]),
+      sourceFormat: FORMATS.OPENAI,
+      provider: "codex",
+      model: "codex-model",
+      body: { messages: [] },
+      stream: false,
+      requestStartTime: Date.now(),
+      trackDone: vi.fn(),
+      appendLog: vi.fn(),
+    });
+    const responseBody = await result.response.json();
+
+    expect(responseBody.usage).toEqual({
+      prompt_tokens: 100,
+      completion_tokens: 10,
+      total_tokens: 110,
+      prompt_tokens_details: { cached_tokens: 80 },
+    });
+    expect(mocks.saveRequestDetail).toHaveBeenCalledWith(expect.objectContaining({
+      tokens: { prompt_tokens: 100, completion_tokens: 10 },
+    }));
+  });
+
   it("keeps logUsage side-effect free for persistence", () => {
     const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 
