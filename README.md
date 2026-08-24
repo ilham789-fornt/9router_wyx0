@@ -167,6 +167,8 @@ Last general sync: **upstream `v0.5.8` (`0c47c891`)**. Reviewed security, compat
 - Prevented OAuth imports from collapsing distinct workspace identities and added exact embedding-token persistence.
 - Preserved cached-token totals through forced SSE-to-JSON responses, deduplicated streaming request-detail rows, and removed duplicate low-level streaming usage writes.
 - Repaired WYx0's protected CodeBuddy tiny-completion retry after collision reconstruction found its callback was still supplied but no longer consumed; the retry again buffers before client flush and safely falls back to the original stream.
+- Preserved force-stream providers for JSON-preferring clients, extracted Gemini usage from both native and Antigravity envelopes, and retained cache/reasoning metadata in the single usage persistence path.
+- Added Hermes/Ollama message-image and attachment detection with shared MIME classification, so both attachment arrays, direct media fields, and embedded data URIs are consistently detected and stripped when unsupported.
 - Verification for each completed batch: focused regressions and production build green; full-suite failing-file and assertion sets unchanged; no protected fork-only file removed.
 
 ### Ported from upstream v0.5.4 → v0.5.8
