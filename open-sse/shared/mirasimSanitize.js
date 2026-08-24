@@ -22,6 +22,12 @@
 
 const IMPLICIT_EFFORTS = new Set(["auto", "none", "disabled"]);
 
+// The relay rejects a single-token request with HTTP 400, reading it as an availability
+// probe rather than real work ("Use GET /v1/limits to check availability"). 9router's own
+// model test (api/models/test/ping.js) sends max_tokens: 1, so clamp to a floor instead of
+// letting every such caller fail. Mirrors CODEBUDDY_MIN_OUTPUT_TOKENS in executors/default.js.
+const MIN_OUTPUT_TOKENS = 16;
+
 const ADAPTIVE = new Set([
   "claude-opus-5", "claude-sonnet-5", "claude-opus-4-8", "claude-opus-4-7", "claude-fable-5",
   "gpt-5.6-sol", "gpt-5.6-luna", "gpt-5.6-terra",
@@ -79,6 +85,12 @@ export function sanitizeMirasimBody(input) {
 
   // Protocol-level: temperature and top_p are mutually exclusive — drop top_p.
   if (body.temperature !== undefined && body.top_p !== undefined) delete body.top_p;
+
+  // Raise single-token requests above the relay's availability-probe threshold.
+  const maxTokens = Number(body.max_tokens);
+  if (Number.isFinite(maxTokens) && maxTokens > 0 && maxTokens < MIN_OUTPUT_TOKENS) {
+    body.max_tokens = MIN_OUTPUT_TOKENS;
+  }
 
   // Effort sentinels → omit (all models).
   stripSentinelEffort(body, "reasoning_effort");

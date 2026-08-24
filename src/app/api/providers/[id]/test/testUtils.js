@@ -4,6 +4,7 @@ import { resolveConnectionProxyConfig } from "@/lib/network/connectionProxy";
 import { testProxyUrl } from "@/lib/network/proxyTest";
 import { isOpenAICompatibleProvider, isAnthropicCompatibleProvider } from "@/shared/constants/providers";
 import { getDefaultModel } from "open-sse/config/providerModels.js";
+import { ensureTicket, invalidateTicket, signatureHeaders, refreshAccountToken, RELAY_BASE } from "open-sse/shared/mirasimSigner.js";
 import { resolveOllamaLocalHost, PROVIDERS } from "open-sse/config/providers.js";
 import {
   refreshProviderCredentials,
@@ -256,7 +257,55 @@ function isTokenExpired(connection) {
   return shouldRefreshCredentials(connection.provider, connection);
 }
 
+// Mirasim: mint a device-signed session ticket and read the account's quota windows.
+// Costs no upstream capacity, so it stays valid even when the relay has no model upstream.
+async function testMirasimConnection(connection) {
+  const pem = connection.providerSpecificData?.devicePrivateKey;
+  if (!pem) return { valid: false, error: "Missing device key — re-import the Mirasim account", refreshed: false };
+
+  let accessToken = connection.accessToken;
+  let refreshed = false;
+  let newTokens = null;
+
+  const probe = async (token) => {
+    const ticket = await ensureTicket({ pem, accountToken: token });
+    const headers = {
+      authorization: `Bearer ${ticket}`,
+      ...signatureHeaders({ pem, method: "GET", path: "/v1/limits", body: "" }),
+    };
+    const res = await fetch(`${RELAY_BASE}/v1/limits`, { headers, signal: AbortSignal.timeout(15000) });
+    return { res, body: await res.json().catch(() => null) };
+  };
+
+  try {
+    let { res, body } = await probe(accessToken);
+
+    if ((res.status === 401 || res.status === 403) && connection.refreshToken) {
+      const next = await refreshAccountToken({ refreshToken: connection.refreshToken });
+      if (!next?.accessToken) return { valid: false, error: "Token expired and refresh failed", refreshed: false };
+      accessToken = next.accessToken;
+      refreshed = true;
+      newTokens = { accessToken: next.accessToken, refreshToken: next.refreshToken, expiresAt: next.expiresAt };
+      invalidateTicket({ pem, accountToken: connection.accessToken });
+      ({ res, body } = await probe(accessToken));
+    }
+
+    if (!res.ok) return { valid: false, error: `Relay returned ${res.status}`, refreshed };
+    if (body?.suspended) return { valid: false, error: "Mirasim account is suspended", refreshed };
+
+    return { valid: true, error: null, refreshed, newTokens };
+  } catch (err) {
+    return { valid: false, error: err.message, refreshed };
+  }
+}
+
 async function testOAuthConnection(connection, effectiveProxy = null) {
+  // Mirasim signs every relay call and rejects single-token chat requests as availability
+  // probes, so it is tested via the endpoint the relay itself points at: GET /v1/limits.
+  if (connection.provider === "mirasim") {
+    return await testMirasimConnection(connection);
+  }
+
   const config = OAUTH_TEST_CONFIG[connection.provider];
   if (!config) return { valid: false, error: "Provider test not supported", refreshed: false };
   if (!connection.accessToken) return { valid: false, error: "No access token", refreshed: false };

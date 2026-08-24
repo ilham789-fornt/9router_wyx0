@@ -16,14 +16,14 @@ describe("mirasim sanitizer", () => {
       top_k: 40,
       service_tier: "auto",
       thinking: { type: "enabled", budget_tokens: 1000 },
-      max_tokens: 10,
+      max_tokens: 100,
     });
     expect(out.temperature).toBeUndefined();
     expect(out.top_p).toBeUndefined();
     expect(out.top_k).toBeUndefined();
     expect(out.service_tier).toBeUndefined();
     expect(out.thinking).toBeUndefined();
-    expect(out.max_tokens).toBe(10);
+    expect(out.max_tokens).toBe(100);
   });
 
   it("adaptive model: keeps temperature===1 and adaptive thinking", () => {
@@ -64,6 +64,18 @@ describe("mirasim sanitizer", () => {
     expect(sanitizeMirasimBody({ model: "claude-opus-5", output_config: { effort: "auto" } }).output_config).toEqual({});
     expect(sanitizeMirasimBody({ model: "claude-opus-5", output_config: { effort: "high" } }).output_config).toEqual({ effort: "high" });
     expect(sanitizeMirasimBody({ model: "claude-opus-5", reasoning_effort: "none" }).reasoning_effort).toBeUndefined();
+  });
+
+  it("raises single-token requests above the relay's probe threshold", () => {
+    // max_tokens: 1 is rejected with 400 as an "availability probe"
+    expect(sanitizeMirasimBody({ model: "claude-opus-5", max_tokens: 1 }).max_tokens).toBe(16);
+    expect(sanitizeMirasimBody({ model: "kimi-k3", max_tokens: 4 }).max_tokens).toBe(16);
+  });
+
+  it("leaves adequate or absent max_tokens alone", () => {
+    expect(sanitizeMirasimBody({ model: "claude-opus-5", max_tokens: 16 }).max_tokens).toBe(16);
+    expect(sanitizeMirasimBody({ model: "claude-opus-5", max_tokens: 4096 }).max_tokens).toBe(4096);
+    expect(sanitizeMirasimBody({ model: "claude-opus-5" }).max_tokens).toBeUndefined();
   });
 
   it("does not mutate the input object", () => {
