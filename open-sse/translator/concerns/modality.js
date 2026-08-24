@@ -2,6 +2,10 @@
 // Driven by getCapabilitiesForModel: vision/audioInput/pdf. Replaces removed
 // media with a short text placeholder so messages never become empty.
 import { FORMATS } from "../formats.js";
+import {
+  capabilityForAttachment,
+  stripUnsupportedDataUris,
+} from "../../utils/mediaCapabilities.js";
 
 // Placeholder text inserted where a media block was removed.
 // Current turn: explain the active model can't read what the user just sent.
@@ -64,16 +68,20 @@ function stripOpenAI(body, caps) {
   body.messages.forEach((msg, i) => {
     if (caps.vision === false) {
       if (Array.isArray(msg.images)) delete msg.images;
-      if (Array.isArray(msg.experimental_attachments)) {
-        msg.experimental_attachments = msg.experimental_attachments.filter(
-          (a) => !(a?.contentType?.startsWith("image/") || (typeof a?.url === "string" && a.url.startsWith("data:image/")))
-        );
+      delete msg.image_url;
+      delete msg.image;
+    }
+    if (caps.audioInput === false) {
+      delete msg.audio_url;
+      delete msg.audio;
+    }
+    for (const key of ["experimental_attachments", "attachments"]) {
+      if (Array.isArray(msg[key])) {
+        msg[key] = msg[key].filter((attachment) => caps[capabilityForAttachment(attachment)] !== false);
       }
-      if (Array.isArray(msg.attachments)) {
-        msg.attachments = msg.attachments.filter(
-          (a) => !(a?.contentType?.startsWith("image/") || (typeof a?.url === "string" && a.url.startsWith("data:image/")))
-        );
-      }
+    }
+    if (typeof msg.content === "string") {
+      msg.content = stripUnsupportedDataUris(msg.content, caps);
     }
     if (!Array.isArray(msg.content)) return;
     const removed = new Set();

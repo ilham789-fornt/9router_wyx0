@@ -5,6 +5,11 @@
 import { checkFallbackError, formatRetryAfter } from "./accountFallback.js";
 import { unavailableResponse } from "../utils/error.js";
 import { getCapabilitiesForModel } from "../providers/capabilities.js";
+import {
+  capabilitiesFromDataUris,
+  capabilityForAttachment,
+  capabilityForMime,
+} from "../utils/mediaCapabilities.js";
 import { extractTextContent } from "../translator/formats/gemini.js";
 
 // Hard capabilities = input modalities; missing one drops request data (e.g. image
@@ -107,11 +112,8 @@ export function detectRequiredCapabilities(body) {
   if (!body || typeof body !== "object") return required;
 
   const addByMime = (mime) => {
-    if (typeof mime !== "string") return;
-    if (mime.startsWith("image/")) required.add("vision");
-    else if (mime === "application/pdf") required.add("pdf");
-    else if (mime.startsWith("audio/")) required.add("audioInput");
-    else if (mime.startsWith("video/")) required.add("videoInput");
+    const capability = capabilityForMime(mime);
+    if (capability) required.add(capability);
   };
 
   const scanBlock = (b) => {
@@ -138,13 +140,12 @@ export function detectRequiredCapabilities(body) {
     }
 
     // Vercel AI SDK / Hermes attachments / experimental_attachments
-    const attachments = m.experimental_attachments || m.attachments;
-    if (Array.isArray(attachments)) {
-      for (const att of attachments) {
-        if (!att) continue;
-        const mime = att.contentType || att.mediaType || (typeof att.url === "string" && att.url.match(/^data:([^;,]+)/)?.[1]);
-        if (mime) addByMime(mime);
-        else if (att.url || att.data) required.add("vision");
+    for (const attachments of [m.experimental_attachments, m.attachments]) {
+      if (Array.isArray(attachments)) {
+        for (const attachment of attachments) {
+          const capability = capabilityForAttachment(attachment);
+          if (capability) required.add(capability);
+        }
       }
     }
 
@@ -157,9 +158,9 @@ export function detectRequiredCapabilities(body) {
 
     // Scan string content for embedded data URIs
     if (typeof m.content === "string") {
-      if (m.content.includes("data:image/")) required.add("vision");
-      else if (m.content.includes("data:audio/")) required.add("audioInput");
-      else if (m.content.includes("data:application/pdf")) required.add("pdf");
+      for (const capability of capabilitiesFromDataUris(m.content)) {
+        required.add(capability);
+      }
     }
   };
 
