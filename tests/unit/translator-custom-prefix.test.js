@@ -1,55 +1,101 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// Mock getModelInfo to simulate custom provider prefix resolution
-vi.mock("@/sse/services/model.js", () => ({
-  getModelInfo: vi.fn(async (modelId) => {
-    // Simulate prefix resolution for custom providers
-    if (modelId.startsWith("my-prefix/")) {
-      return {
-        provider: "openai-compatible-chat-abc123",
-        model: modelId.replace("my-prefix/", "")
-      };
-    }
-    if (modelId.startsWith("acme/")) {
-      return {
-        provider: "anthropic-compatible-claude-xyz",
-        model: modelId.replace("acme/", "")
-      };
-    }
-    // Default: no prefix
-    return {
-      provider: modelId.split("/")[1] || "unknown",
-      model: modelId.split("/")[1] || modelId
-    };
-  })
+const mocks = vi.hoisted(() => ({
+  detectFormat: vi.fn(() => "openai"),
+  getModelInfo: vi.fn(),
+  getTargetFormat: vi.fn(() => "openai"),
+  translateRequest: vi.fn((_source, _target, model, body) => ({ ...body, model })),
 }));
 
-describe("Translator custom provider prefix resolution", () => {
+vi.mock("@/sse/services/model.js", () => ({
+  getModelInfo: mocks.getModelInfo,
+}));
+vi.mock("../../open-sse/services/provider.js", () => ({
+  detectFormat: mocks.detectFormat,
+  getTargetFormat: mocks.getTargetFormat,
+}));
+vi.mock("../../open-sse/translator/index.js", () => ({
+  translateRequest: mocks.translateRequest,
+}));
+vi.mock("@/lib/localDb.js", () => ({
+  getProviderConnections: vi.fn(async () => []),
+}));
+vi.mock("../../open-sse/executors/index.js", () => ({
+  getExecutor: vi.fn(),
+}));
+
+import { POST } from "../../src/app/api/translator/translate/route.js";
+
+async function postStep(step, body) {
+  return POST(new Request("https://9router.local/api/translator/translate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ step, body }),
+  }));
+}
+
+describe("translator custom provider prefix resolution", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.getModelInfo.mockImplementation(async (modelId) => {
+      if (modelId.startsWith("my-prefix/")) {
+        return {
+          provider: "openai-compatible-chat-abc123",
+          model: modelId.slice("my-prefix/".length),
+        };
+      }
+      if (modelId.startsWith("acme/")) {
+        return {
+          provider: "anthropic-compatible-claude-xyz",
+          model: modelId.slice("acme/".length),
+        };
+      }
+      const [provider, model] = modelId.split("/");
+      return { provider, model: model || provider };
+    });
   });
 
-  it("should resolve OpenAI-compatible provider prefix via getModelInfo", async () => {
-    const { getModelInfo } = await import("@/sse/services/model.js");
-    const result = await getModelInfo("my-prefix/gpt-4");
+  it("uses the application model resolver in debug step 1", async () => {
+    const response = await postStep(1, {
+      model: "my-prefix/gpt-4",
+      messages: [{ role: "user", content: "hello" }],
+    });
+    const payload = await response.json();
 
-    expect(result.provider).toBe("openai-compatible-chat-abc123");
-    expect(result.model).toBe("gpt-4");
+    expect(response.status).toBe(200);
+    expect(mocks.getModelInfo).toHaveBeenCalledWith("my-prefix/gpt-4");
+    expect(payload.result).toMatchObject({
+      provider: "openai-compatible-chat-abc123",
+      model: "gpt-4",
+    });
   });
 
-  it("should resolve Anthropic-compatible provider prefix via getModelInfo", async () => {
-    const { getModelInfo } = await import("@/sse/services/model.js");
-    const result = await getModelInfo("acme/claude-3");
+  it("passes the resolved provider and model through debug step 2", async () => {
+    const clientBody = {
+      model: "acme/claude-3",
+      messages: [{ role: "user", content: "hello" }],
+    };
+    const response = await postStep(2, clientBody);
+    const payload = await response.json();
 
-    expect(result.provider).toBe("anthropic-compatible-claude-xyz");
-    expect(result.model).toBe("claude-3");
+    expect(response.status).toBe(200);
+    expect(mocks.getModelInfo).toHaveBeenCalledWith("acme/claude-3");
+    expect(mocks.translateRequest).toHaveBeenCalledWith(
+      "openai",
+      "openai",
+      "claude-3",
+      clientBody,
+      true,
+      null,
+      "anthropic-compatible-claude-xyz",
+    );
+    expect(payload.result.body.model).toBe("claude-3");
   });
 
-  it("should handle model ID without prefix", async () => {
-    const { getModelInfo } = await import("@/sse/services/model.js");
-    const result = await getModelInfo("openai/gpt-4");
+  it("keeps ordinary provider/model IDs working", async () => {
+    const response = await postStep(1, { model: "openai/gpt-4", messages: [] });
+    const payload = await response.json();
 
-    expect(result.provider).toBeDefined();
-    expect(result.model).toBe("gpt-4");
+    expect(payload.result).toMatchObject({ provider: "openai", model: "gpt-4" });
   });
 });
