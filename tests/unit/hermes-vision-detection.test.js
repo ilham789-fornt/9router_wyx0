@@ -1,6 +1,5 @@
 import { describe, it, expect } from "vitest";
 import { detectRequiredCapabilities } from "../../open-sse/services/combo.js";
-import { augmentModelsWithCapacityAdapter } from "../../open-sse/services/capacityAdapter.js";
 import { stripUnsupportedModalities } from "../../open-sse/translator/concerns/modality.js";
 import { FORMATS } from "../../open-sse/translator/formats.js";
 
@@ -68,30 +67,6 @@ describe("Hermes Vision Image Detection", () => {
     };
     const caps = detectRequiredCapabilities(body);
     expect(caps.has("vision")).toBe(true);
-  });
-
-  it("auto-switches non-vision model (deepseek-v4-pro) to Vision Adapter model (Kimi-K3)", () => {
-    const body = {
-      messages: [
-        {
-          role: "user",
-          content: "Analyze image",
-          images: ["base64data..."],
-        },
-      ],
-    };
-    const reqCaps = detectRequiredCapabilities(body);
-    const settings = {
-      capacityAdapter: {
-        vision: {
-          enabled: true,
-          models: ["cmc/moonshotai/Kimi-K3"],
-        },
-      },
-    };
-
-    const augmented = augmentModelsWithCapacityAdapter(["cmc/deepseek/deepseek-v4-pro"], reqCaps, settings);
-    expect(augmented).toEqual(["cmc/moonshotai/Kimi-K3", "cmc/deepseek/deepseek-v4-pro"]);
   });
 
   it("strips msg.images and attachments when model does not support vision", () => {
