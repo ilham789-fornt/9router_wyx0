@@ -127,6 +127,57 @@ describe("mirasim signer", () => {
   });
 });
 
+describe("mirasim context windows", () => {
+  const ctx = async (model) => {
+    const { getCapabilitiesForModel } = await import("open-sse/providers/capabilities.js");
+    return getCapabilitiesForModel("mirasim", model);
+  };
+
+  it("serves Opus and Sonnet tiers at 1M", async () => {
+    for (const model of ["claude-opus-5", "claude-sonnet-5", "claude-opus-4-8", "claude-opus-4-7"]) {
+      expect((await ctx(model)).contextWindow, model).toBe(1000000);
+    }
+  });
+
+  it("keeps Haiku at 200k", async () => {
+    expect((await ctx("claude-haiku-4-5")).contextWindow).toBe(200000);
+  });
+
+  it("leaves gpt-5.6 and kimi on their native windows", async () => {
+    expect((await ctx("gpt-5.6-sol")).contextWindow).toBe(400000);
+    expect((await ctx("kimi-k3")).contextWindow).toBe(262144);
+  });
+
+  it("preserves non-window capabilities through the provider override", async () => {
+    // a provider override short-circuits the fallback chain, so these must be restated
+    const opus = await ctx("claude-opus-5");
+    expect(opus).toMatchObject({ vision: true, search: true, reasoning: true, thinkingFormat: "claude-budget" });
+    expect((await ctx("claude-opus-4-7")).maxOutput).toBe(128000);
+  });
+
+  it("asks the relay for the 1M window on those models", () => {
+    for (const model of ["claude-opus-5", "claude-sonnet-5", "claude-opus-4-8", "claude-opus-4-7"]) {
+      expect(sanitizeMirasimBody({ model }).metadata?.autoCompactWindow, model).toBe(true);
+    }
+  });
+
+  it("does not ask for it on models without a 1M tier", () => {
+    for (const model of ["claude-haiku-4-5", "gpt-5.6-sol", "kimi-k3"]) {
+      expect(sanitizeMirasimBody({ model }).metadata?.autoCompactWindow, model).toBeUndefined();
+    }
+  });
+
+  it("respects an explicit caller override", () => {
+    const off = sanitizeMirasimBody({ model: "claude-opus-5", metadata: { autoCompactWindow: false } });
+    expect(off.metadata.autoCompactWindow).toBe(false);
+  });
+
+  it("keeps other metadata intact when defaulting the window", () => {
+    const out = sanitizeMirasimBody({ model: "claude-opus-5", metadata: { user_id: "u1" } });
+    expect(out.metadata).toEqual({ user_id: "u1", autoCompactWindow: true });
+  });
+});
+
 describe("mirasim usage", () => {
   it("is advertised as a usage-capable provider", async () => {
     const { USAGE_SUPPORTED_PROVIDERS } = await import("@/shared/constants/providers");

@@ -94,6 +94,21 @@ export const MODEL_CAPABILITIES = {
  * Provider-specific capability overrides. Keyed by provider alias/id.
  */
 export const PROVIDER_CAPABILITIES = {
+  // Mirasim relay — the fork serves the Claude Opus and Sonnet tiers with the 1M
+  // window enabled by default (the request path sets metadata.autoCompactWindow,
+  // see shared/mirasimSanitize.js). Haiku stays at 200k because it has no 1M tier.
+  // gpt-5.6-* and kimi-k3 are deliberately absent so they keep resolving through
+  // the shared pattern table (400k and 262144 respectively), as does fable.
+  // NOTE: a provider override short-circuits the fallback chain, so each entry
+  // must restate every non-default capability, not just the window.
+  mirasim: {
+    "claude-opus-5":    { vision: true, search: true, reasoning: true, thinkingFormat: "claude-budget", contextWindow: 1000000 },
+    "claude-sonnet-5":  { vision: true, search: true, reasoning: true, thinkingFormat: "claude-budget", contextWindow: 1000000 },
+    "claude-opus-4-8":  { vision: true, search: true, reasoning: true, thinkingFormat: "claude-budget", contextWindow: 1000000 },
+    "claude-opus-4-7":  { vision: true, search: true, reasoning: true, thinkingFormat: "claude-adaptive", contextWindow: 1000000, maxOutput: 128000 },
+    "claude-haiku-4-5": { vision: true, search: true, reasoning: true, thinkingFormat: "claude-budget", contextWindow: 200000 },
+  },
+
   // CodeBuddy.cn - authoritative per-model metadata from the gateway's model
   // config. Every model reasons via OpenAI-style reasoning_effort.
   "codebuddy-cn": {

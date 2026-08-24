@@ -28,6 +28,14 @@ const IMPLICIT_EFFORTS = new Set(["auto", "none", "disabled"]);
 // letting every such caller fail. Mirrors CODEBUDDY_MIN_OUTPUT_TOKENS in executors/default.js.
 const MIN_OUTPUT_TOKENS = 16;
 
+// Models the fork serves with the 1M context window on by default. The relay grants
+// the larger window only when metadata.autoCompactWindow is set — declaring the size in
+// providers/capabilities.js alone would advertise a window we never actually ask for.
+// Haiku is excluded (no 1M tier); gpt-5.6-* and kimi-k3 keep their own native windows.
+const ONE_M_MODELS = new Set([
+  "claude-opus-5", "claude-sonnet-5", "claude-opus-4-8", "claude-opus-4-7",
+]);
+
 const ADAPTIVE = new Set([
   "claude-opus-5", "claude-sonnet-5", "claude-opus-4-8", "claude-opus-4-7", "claude-fable-5",
   "gpt-5.6-sol", "gpt-5.6-luna", "gpt-5.6-terra",
@@ -62,6 +70,12 @@ export function sanitizeMirasimBody(input) {
   // [1m] alias → base model + autoCompactWindow
   if (typeof body.model === "string" && /\[1m\]$/.test(body.model)) {
     body.model = baseModel(body.model);
+    body.metadata = { ...(body.metadata || {}), autoCompactWindow: true };
+  }
+
+  // Default the 1M window on for the tiers that support it, without overriding a
+  // caller that set the flag explicitly (including explicitly to false).
+  if (ONE_M_MODELS.has(baseModel(body.model)) && body.metadata?.autoCompactWindow === undefined) {
     body.metadata = { ...(body.metadata || {}), autoCompactWindow: true };
   }
 
