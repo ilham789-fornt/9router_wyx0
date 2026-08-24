@@ -22,6 +22,7 @@ import { CodeBuddyExecutor } from "./codebuddy-cn.js";
 import TraeExecutor from "./trae.js";
 import WindsurfExecutor from "./windsurf.js";
 import ZedExecutor from "./zed.js";
+import { MirasimExecutor } from "./mirasim.js";
 import { DefaultExecutor } from "./default.js";
 
 const executors = {
@@ -52,6 +53,8 @@ const executors = {
   trae: new TraeExecutor(),
   windsurf: new WindsurfExecutor(),
   zed: new ZedExecutor(),
+  mirasim: new MirasimExecutor(),
+  mm: new MirasimExecutor(), // Alias for mirasim
 };
 
 const defaultCache = new Map();

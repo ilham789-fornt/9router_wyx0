@@ -1,5 +1,6 @@
 import { PROVIDERS } from "../config/providers.js";
 import { OAUTH_ENDPOINTS, REFRESH_LEAD_MS } from "../config/appConstants.js";
+import { refreshAccountToken } from "../shared/mirasimSigner.js";
 import {
   refreshXaiToken,
   refreshAccessToken,
@@ -140,7 +141,8 @@ const REFRESH_HANDLERS = {
   windsurf: (c, log) => refreshWindsurfToken(c, log),
   zed: () => refreshZedToken(),
   vertex: vertexRefreshHandler,
-  "vertex-partner": vertexRefreshHandler
+  "vertex-partner": vertexRefreshHandler,
+  mirasim: (c) => refreshAccountToken({ refreshToken: c.refreshToken }),
 };
 
 export async function getAccessToken(provider, credentials, log) {

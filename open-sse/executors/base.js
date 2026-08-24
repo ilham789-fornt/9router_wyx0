@@ -84,6 +84,12 @@ export class BaseExecutor {
     return JSON.stringify(transformedBody);
   }
 
+  // Override in subclass to sign/mutate headers using the FINAL request body bytes.
+  // Runs after prepareRequestBody and before fetch, so a signature can cover the exact
+  // bytes sent and an async credential/ticket step can complete first. No-op by default.
+  // ctx: { method, url, body, credentials, proxyOptions, log }
+  async signRequest(/* headers, ctx */) {}
+
   shouldRetry(status, urlIndex) {
     return status === HTTP_STATUS.RATE_LIMITED && urlIndex + 1 < this.getFallbackCount();
   }
@@ -152,6 +158,7 @@ export class BaseExecutor {
 
       try {
         const requestBody = this.prepareRequestBody(transformedBody, headers);
+        await this.signRequest(headers, { method: "POST", url, body: requestBody, credentials, proxyOptions, log });
         const bodyBytes = typeof requestBody === "string" ? Buffer.byteLength(requestBody) : requestBody?.length ?? 0;
         const fetchT0 = Date.now();
         dbg("FETCH", `${this.provider.toUpperCase()} → ${url} | body=${bodyBytes}B | connectTimeout=${connectTimeoutMs}ms | requestTimeout=${requestTimeoutMs}ms`);
