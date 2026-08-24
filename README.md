@@ -169,6 +169,7 @@ Last general sync: **upstream `v0.5.8` (`0c47c891`)**. Reviewed security, compat
 - Repaired WYx0's protected CodeBuddy tiny-completion retry after collision reconstruction found its callback was still supplied but no longer consumed; the retry again buffers before client flush and safely falls back to the original stream.
 - Preserved force-stream providers for JSON-preferring clients, extracted Gemini usage from both native and Antigravity envelopes, and retained cache/reasoning metadata in the single usage persistence path.
 - Added Hermes/Ollama message-image and attachment detection with shared MIME classification, so both attachment arrays, direct media fields, and embedded data URIs are consistently detected and stripped when unsupported.
+- Expanded Anthropic token estimates to structured system/tool/thinking content, fixed provider-wide parameter transforms, resolved custom compatible-provider prefixes in translator debugging, supported Windows RTK `find` output, and added the dashed Claude Opus 4.7 capability override.
 - Verification for each completed batch: focused regressions and production build green; full-suite failing-file and assertion sets unchanged; no protected fork-only file removed.
 
 ### Ported from upstream v0.5.4 → v0.5.8
