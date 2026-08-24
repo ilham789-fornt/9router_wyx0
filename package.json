@@ -1,6 +1,6 @@
 {
   "name": "wyxrouter",
-  "version": "0.5.8",
+  "version": "0.5.55",
   "description": "WYx0 fork of 9Router - AI Router with Kiro/CodeBuddy automation and quota tracking",
   "bin": {
     "wyxrouter": "./cli/cli.js"
