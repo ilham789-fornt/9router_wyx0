@@ -22,7 +22,7 @@
 - Use OpenAI as the normal intermediate translator format, but prefer an exact source-to-target registration when the bridge would lose thinking, images, tool identifiers, error state, or wire-format details.
 - Keep binary AWS EventStream, protobuf ConnectRPC, and NDJSON handling in their specialized executors instead of treating them as ordinary JSON or SSE translators.
 - Preserve abort propagation, streaming order, fallback behavior, terminal errors, and usage accounting across provider paths.
-- Streaming usage has one persistence owner: completion handlers call `saveUsageStats`; low-level `logUsage` must not create duplicate usage-history or request-log rows.
+- Streaming usage has one persistence owner: completion handlers call `saveUsageStats`, which retains cache and reasoning metadata; low-level `logUsage` must not create duplicate usage-history or request-log rows.
 - A streaming request-detail placeholder and its completion update must share one ID so persistence updates the row instead of appending a duplicate.
 - Forced SSE-to-JSON conversion must include cache-read and cache-creation input tokens in client-visible prompt totals and request details.
 - SSE transforms must discard malformed non-JSON `data:` payloads and emit any OpenAI `[DONE]` sentinel at most once; same-format Responses streams retain that sentinel, while other translated streams may use their native terminal event plus stream close.

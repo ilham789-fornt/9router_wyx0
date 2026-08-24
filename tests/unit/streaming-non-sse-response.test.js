@@ -219,4 +219,40 @@ describe("CodeBuddy streaming preservation", () => {
     expect(warnSpy).toHaveBeenCalledOnce();
     warnSpy.mockRestore();
   });
+
+  it("returns the buffered original when reading the retry stream fails", async () => {
+    const retryBody = new ReadableStream({
+      start(controller) {
+        controller.error(Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }));
+      },
+    });
+    const retryProviderResponse = vi.fn().mockResolvedValue({
+      response: new Response(retryBody, {
+        status: 200,
+        headers: { "Content-Type": "text/event-stream" },
+      }),
+    });
+    const controller = streamController();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const result = await handleStreamingResponse({
+      providerResponse: openAIStreamResponse("Short", 2),
+      provider: "codebuddy",
+      model: "codebuddy-model",
+      sourceFormat: FORMATS.OPENAI,
+      targetFormat: FORMATS.OPENAI,
+      body: { messages: [] },
+      stream: true,
+      requestStartTime: Date.now(),
+      streamController: controller,
+      onStreamComplete: vi.fn(),
+      streamDetailId: "detail-retry-read-fallback",
+      retryProviderResponse,
+    });
+
+    expect(await result.response.text()).toContain("Short");
+    expect(retryProviderResponse).toHaveBeenCalledOnce();
+    expect(controller.handleError).not.toHaveBeenCalled();
+    expect(warnSpy).toHaveBeenCalledOnce();
+    warnSpy.mockRestore();
+  });
 });

@@ -87,16 +87,19 @@ function isTinyCodeBuddyCompletion(contentObj, usage) {
 async function drainReadable(readable) {
   const reader = readable.getReader();
   const chunks = [];
+  let error = null;
   try {
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
       chunks.push(value);
     }
+  } catch (caught) {
+    error = caught;
   } finally {
     reader.releaseLock();
   }
-  return chunks;
+  return { chunks, error };
 }
 
 function replayChunks(chunks, streamController) {
@@ -109,43 +112,56 @@ function replayChunks(chunks, streamController) {
   });
 }
 
-function createProbeStreamController(streamController) {
+function createProbeStreamController(streamController, onError) {
   return {
     signal: streamController.signal,
     startTime: streamController.startTime,
     isConnected: () => streamController.isConnected?.() ?? true,
     handleComplete: () => {},
-    handleError: (error) => streamController.handleError?.(error),
-    handleDisconnect: (reason) => streamController.handleDisconnect?.(reason),
+    handleError: onError,
+    handleDisconnect: (reason) => onError(new Error(String(reason || "probe disconnected"))),
     abort: () => streamController.abort?.(),
   };
 }
 
 async function buildCodeBuddyRetryingBody(options) {
   let completion = null;
-  const probeOptions = {
+  let probeError = null;
+  const makeProbeOptions = () => ({
     ...options,
-    streamController: createProbeStreamController(options.streamController),
-  };
-  const captureComplete = (contentObj, usage, ttftAt) => {
-    completion = { contentObj, usage, ttftAt };
-  };
-  const firstBody = createTransformedBody({
-    ...probeOptions,
-    onStreamComplete: captureComplete,
+    streamController: createProbeStreamController(options.streamController, (error) => {
+      probeError ||= error;
+    }),
   });
-  const firstChunks = await drainReadable(firstBody);
+  const firstBody = createTransformedBody({
+    ...makeProbeOptions(),
+    onStreamComplete: (contentObj, usage, ttftAt) => {
+      completion = { contentObj, usage, ttftAt };
+    },
+  });
+  const firstDrain = await drainReadable(firstBody);
+  const firstChunks = firstDrain.chunks;
+  const firstCompletion = completion;
   const replayFirst = () => {
-    options.onStreamComplete?.(completion?.contentObj, completion?.usage, completion?.ttftAt);
+    options.onStreamComplete?.(
+      firstCompletion?.contentObj,
+      firstCompletion?.usage,
+      firstCompletion?.ttftAt
+    );
     return replayChunks(firstChunks, options.streamController);
   };
 
-  if (!isTinyCodeBuddyCompletion(completion?.contentObj, completion?.usage)) {
+  if (firstDrain.error || probeError) {
+    console.warn(`[CodeBuddy] Initial buffered stream ended early; returning captured bytes: ${(firstDrain.error || probeError)?.message || "unknown error"}`);
+    return replayFirst();
+  }
+
+  if (!isTinyCodeBuddyCompletion(firstCompletion?.contentObj, firstCompletion?.usage)) {
     return replayFirst();
   }
 
   console.log(
-    `[CodeBuddy] Tiny streaming completion detected; retrying once | model=${options.model} | out=${completion?.usage?.completion_tokens ?? "?"} | chars=${(completion?.contentObj?.content || "").trim().length}`
+    `[CodeBuddy] Tiny streaming completion detected; retrying once | model=${options.model} | out=${firstCompletion?.usage?.completion_tokens ?? "?"} | chars=${(firstCompletion?.contentObj?.content || "").trim().length}`
   );
   let retryResult;
   try {
@@ -163,14 +179,28 @@ async function buildCodeBuddyRetryingBody(options) {
   }
 
   completion = null;
-  const secondBody = createTransformedBody({
-    ...probeOptions,
-    providerResponse: retryResponse,
-    onStreamComplete: captureComplete,
-  });
-  const secondChunks = await drainReadable(secondBody);
+  probeError = null;
+  let secondDrain;
+  try {
+    const secondBody = createTransformedBody({
+      ...makeProbeOptions(),
+      providerResponse: retryResponse,
+      onStreamComplete: (contentObj, usage, ttftAt) => {
+        completion = { contentObj, usage, ttftAt };
+      },
+    });
+    secondDrain = await drainReadable(secondBody);
+  } catch (error) {
+    console.warn(`[CodeBuddy] Tiny completion retry stream failed; returning the original response: ${error?.message || error}`);
+    return replayFirst();
+  }
+  if (secondDrain.error || probeError || !completion) {
+    const retryError = secondDrain.error || probeError;
+    console.warn(`[CodeBuddy] Tiny completion retry stream ended early; returning the original response: ${retryError?.message || "missing terminal completion"}`);
+    return replayFirst();
+  }
   options.onStreamComplete?.(completion?.contentObj, completion?.usage, completion?.ttftAt);
-  return replayChunks(secondChunks, options.streamController);
+  return replayChunks(secondDrain.chunks, options.streamController);
 }
 
 /**
