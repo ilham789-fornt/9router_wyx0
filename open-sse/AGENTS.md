@@ -39,6 +39,7 @@
 - Client-supplied search provider base URLs must accept only public HTTP(S) targets through `src/shared/utils/ssrfGuard.js`; admin-configured registry URLs remain the trusted default.
 - Combo modality detection recognizes current-turn message `images`, attachment arrays, direct media fields, and embedded data URIs; unsupported vision payloads are removed before provider dispatch.
 - RTK `find` detection and grouping accepts Unix separators and Windows drive-letter/backslash paths while normalizing compacted labels to forward slashes.
+- Jina Reader web fetches use the root JSON POST API, retain upstream status/error text, and prefer Jina's `Title:` metadata before Markdown headings.
 - Under the root Fork Preservation Rule, keep the WYx0 `codebuddy` and `codebuddy-cn` registries, their aliases, and the CodeBuddy-aware branches in `executors/default.js` and `handlers/chatCore.js`. Upstream's `codebuddy-intl` and `tencent` entries must not shadow or replace them.
 - CodeBuddy streaming may buffer a first tiny non-empty completion and retry once before exposing bytes; if the retry fails or is not a successful SSE response, replay the original buffered stream.
 - Porting the upstream `resolveTransport`/`runtimeTransport` multi-endpoint refactor requires threading the new transport through the CodeBuddy execution path first; it is not a drop-in replacement for this subtree's executor dispatch.

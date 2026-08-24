@@ -18,6 +18,7 @@
 - Keep usage and request-detail recording consistent across streaming and non-streaming responses.
 - Persist embedding usage only when the provider reports an exact positive input-token total with zero output tokens; do not store estimates or malformed counters as exact usage.
 - Treat routing, retries, cooldowns, and terminal errors as user-visible behavior requiring focused tests.
+- Web-fetch account errors are cleared only after the provider core returns success; recovery clears persisted error codes alongside status and backoff state.
 
 ## Work Guidance
 
