@@ -40,6 +40,6 @@ export default {
     { id: "kimi-k3", name: "Kimi K3" },
   ],
   features: {
-    usage: false,
+    usage: true,
   },
 };

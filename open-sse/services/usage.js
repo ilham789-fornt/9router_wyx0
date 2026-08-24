@@ -14,6 +14,7 @@ import { getCodeBuddyCnUsage } from "./usage/codebuddy-cn.js";
 
 export { consumeCodexRateLimitResetCredit };
 import { getKiroUsage } from "./usage/kiro.js";
+import { getMirasimUsage } from "./usage/mirasim.js";
 import { getMiniMaxUsage } from "./usage/minimax.js";
 import {
   getQwenUsage,
@@ -61,10 +62,14 @@ const USAGE_HANDLERS = {
   "minimax-cn": (c) => getMiniMaxUsage(c.apiKey, c.provider, c.proxyOptions),
   "vercel-ai-gateway": (c) => getVercelAiGatewayUsage(c.apiKey, c.proxyOptions),
   "codebuddy-cn": (c) => getCodeBuddyCnUsage(c.accessToken, c.apiKey, c.providerSpecificData, c.proxyOptions),
+  mirasim: (c) => getMirasimUsage(
+    { accessToken: c.accessToken, refreshToken: c.refreshToken, providerSpecificData: c.providerSpecificData },
+    c.proxyOptions,
+  ),
 };
 
 export async function getUsageForProvider(connection, proxyOptions = null) {
-  const { provider, accessToken, apiKey, providerSpecificData, projectId } = connection;
+  const { provider, accessToken, apiKey, refreshToken, providerSpecificData, projectId } = connection;
   const providerDataWithProjectId = {
     ...(providerSpecificData || {}),
     ...(projectId ? { projectId } : {}),
@@ -78,6 +83,7 @@ export async function getUsageForProvider(connection, proxyOptions = null) {
     provider,
     accessToken,
     apiKey,
+    refreshToken,
     providerSpecificData,
     providerDataWithProjectId,
     proxyOptions,

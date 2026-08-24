@@ -127,6 +127,43 @@ describe("mirasim signer", () => {
   });
 });
 
+describe("mirasim usage", () => {
+  it("is advertised as a usage-capable provider", async () => {
+    const { USAGE_SUPPORTED_PROVIDERS } = await import("@/shared/constants/providers");
+    expect(USAGE_SUPPORTED_PROVIDERS).toContain("mirasim");
+  });
+
+  it("reports a clear message instead of throwing when the device key is missing", async () => {
+    const { getMirasimUsage } = await import("open-sse/services/usage/mirasim.js");
+    const usage = await getMirasimUsage({ accessToken: "t", providerSpecificData: {} });
+    expect(usage.quotas).toBeUndefined();
+    expect(usage.message).toMatch(/device key/i);
+  });
+
+  it("labels relay windows readably", async () => {
+    const { _internal } = await import("open-sse/services/usage/mirasim.js");
+    expect(_internal.labelForWindow("5h")).toBe("session (5h)");
+    expect(_internal.labelForWindow("7d")).toBe("weekly (7d)");
+    expect(_internal.labelForWindow("7d_fable")).toBe("weekly fable (7d)");
+    expect(_internal.labelForWindow("30d")).toBe("30d"); // unknown → passthrough
+  });
+
+  it("maps a relay window onto a quota object", async () => {
+    const { _internal } = await import("open-sse/services/usage/mirasim.js");
+    const q = _internal.buildQuota({ name: "5h", used: 100.4, budget: 400, reset_at: 1787593570 });
+    expect(q).toMatchObject({ used: 100, total: 400, remaining: 300, unlimited: false });
+    expect(q.remainingPercentage).toBeCloseTo(74.9, 1);
+    expect(q.resetAt).toBe(new Date(1787593570 * 1000).toISOString());
+  });
+
+  it("treats a zero budget as unlimited instead of dividing by zero", async () => {
+    const { _internal } = await import("open-sse/services/usage/mirasim.js");
+    const q = _internal.buildQuota({ name: "7d", used: 50, budget: 0 });
+    expect(q).toMatchObject({ unlimited: true, remainingPercentage: 100 });
+    expect(Number.isNaN(q.remainingPercentage)).toBe(false);
+  });
+});
+
 describe("mirasim envelope decrypt (aes-256-gcm)", () => {
   it("round-trips an mrs1: envelope with a known key", async () => {
     const key = crypto.randomBytes(32);
