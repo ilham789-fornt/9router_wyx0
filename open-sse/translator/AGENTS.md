@@ -20,6 +20,7 @@
 - OpenAI chat-to-Responses conversion treats the first system or developer message as instructions, while Responses-to-Chat conversion removes Responses-only `client_metadata` before provider dispatch.
 - Claude preparation must retain image-only and document-only messages, and OpenAI-to-Claude tool conversion must accept both typed and bare `{ function: ... }` wrappers.
 - Gemini schema cleanup recursively removes unsupported JSON Schema array, numeric, content, and unevaluated keywords before provider submission.
+- Parameter-support rules may be model-matched drops or provider-wide transformations; provider-wide rules do not require `match` or `drop` fields.
 - Keep passthrough behavior intact when source and target formats are identical.
 - Register new translators through the existing registry pattern and update `tests/translator/registerAll.js` for Vitest.
 - Do not treat binary AWS EventStream, protobuf ConnectRPC, or NDJSON envelopes as ordinary SSE or JSON.

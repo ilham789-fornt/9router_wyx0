@@ -14,6 +14,7 @@
 
 - Keep compatibility endpoints thin: validate HTTP input, delegate to shared routing or service modules, and preserve expected status, headers, streaming, and error formats.
 - Active LLM entries from `/v1/models` expose numeric `context_length` and `max_completion_tokens` fields, falling back to the shared capability table when live or service-kind metadata is partial.
+- `/v1/messages/count_tokens` estimates system prompts, tool definitions, and structured Anthropic text, tool, result, and thinking blocks instead of counting plain message text only.
 - Treat provider credentials, cookies, API keys, OAuth tokens, and request logs as sensitive.
 - Never issue a dashboard session for remote authentication with the built-in default password, and redact conversation payloads from request-detail API responses.
 - Preserve Next.js server/client boundaries; add `"use client"` only where browser state or APIs require it.
@@ -30,6 +31,7 @@
 - Keep CodeBuddy CN out of the generic OAuth Providers section: its provider detail deep-links to the dedicated Automation tab, where OAuth and 5sim bulk registration remain separate modes.
 - Keep CodeBuddy CN 5sim quote/check routes under the dedicated automation API surface and return sanitized balance, stock, affordability, and proxy-route metadata only.
 - Do not silently change `/v1/*` compatibility semantics without focused regression tests.
+- Translator debug steps resolve models through the application model service so custom compatible-provider prefixes map to their saved provider IDs.
 
 ## Work Guidance
 
