@@ -88,4 +88,31 @@ describe("web fetch account state", () => {
     );
     expect(mocks.markAccountUnavailable).not.toHaveBeenCalled();
   });
+
+  it("does not clear account state when the provider fetch fails", async () => {
+    mocks.handleFetchCore.mockResolvedValue({
+      success: false,
+      status: 502,
+      error: "temporary upstream failure",
+    });
+    mocks.markAccountUnavailable.mockResolvedValue({ shouldFallback: false });
+
+    const response = await handleFetch(new Request("http://localhost/v1/web/fetch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        provider: "jina-reader",
+        url: "https://example.com/article",
+      }),
+    }));
+
+    expect(response.status).toBe(502);
+    expect(mocks.clearAccountError).not.toHaveBeenCalled();
+    expect(mocks.markAccountUnavailable).toHaveBeenCalledWith(
+      "jina-connection",
+      502,
+      "temporary upstream failure",
+      "jina-reader",
+    );
+  });
 });
