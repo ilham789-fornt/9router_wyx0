@@ -17,6 +17,11 @@ export default {
     website: "https://mirasim.ai",
     notice: {
       signupUrl: "https://mirasim.ai",
+      // The relay fingerprints the caller's system prompt and refuses agent harnesses
+      // it does not recognise, answering 400 "the request was rejected as invalid".
+      // Verified: a Claude Code system prompt is served, while DSH Desktop's opening
+      // line is rejected — the request shape is irrelevant to that decision.
+      text: "Works with Claude Code and OpenAI-compatible clients. The relay identifies the calling agent from its system prompt and rejects harnesses it does not recognise with a 400 \"rejected as invalid\" — that is Mirasim's policy, not a misconfiguration. Import requires the Mirasim desktop app installed under the same OS user; after that the app need not be running.",
     },
   },
   category: "oauth",

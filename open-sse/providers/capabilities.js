@@ -102,9 +102,13 @@ export const PROVIDER_CAPABILITIES = {
   // NOTE: a provider override short-circuits the fallback chain, so each entry
   // must restate every non-default capability, not just the window.
   mirasim: {
-    "claude-opus-5":    { vision: true, search: true, reasoning: true, thinkingFormat: "claude-budget", contextWindow: 1000000 },
-    "claude-sonnet-5":  { vision: true, search: true, reasoning: true, thinkingFormat: "claude-budget", contextWindow: 1000000 },
-    "claude-opus-4-8":  { vision: true, search: true, reasoning: true, thinkingFormat: "claude-budget", contextWindow: 1000000 },
+    // These tiers are adaptive on the relay: it rejects a fixed thinking budget and
+    // takes effort levels via output_config instead. Classifying them as claude-budget
+    // made the translator emit thinking.budget_tokens, which the sanitizer then had to
+    // strip — so low/medium/high never reached the relay and thinking was silently lost.
+    "claude-opus-5":    { vision: true, search: true, reasoning: true, thinkingFormat: "claude-adaptive", contextWindow: 1000000 },
+    "claude-sonnet-5":  { vision: true, search: true, reasoning: true, thinkingFormat: "claude-adaptive", contextWindow: 1000000 },
+    "claude-opus-4-8":  { vision: true, search: true, reasoning: true, thinkingFormat: "claude-adaptive", contextWindow: 1000000 },
     "claude-opus-4-7":  { vision: true, search: true, reasoning: true, thinkingFormat: "claude-adaptive", contextWindow: 1000000, maxOutput: 128000 },
     "claude-haiku-4-5": { vision: true, search: true, reasoning: true, thinkingFormat: "claude-budget", contextWindow: 200000 },
   },

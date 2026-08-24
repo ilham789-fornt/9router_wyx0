@@ -54,10 +54,18 @@ function modelClass(model) {
   return "other";
 }
 
+// The relay's effort enum is low|medium|high|max. Anything outside it is rejected, so
+// map the translator's wider vocabulary onto the nearest supported level.
+const EFFORT_ALIASES = { minimal: "low", xhigh: "high" };
+
 function stripSentinelEffort(obj, key) {
-  if (obj && typeof obj === "object" && typeof obj[key] === "string" && IMPLICIT_EFFORTS.has(obj[key])) {
+  if (!obj || typeof obj !== "object" || typeof obj[key] !== "string") return;
+  if (IMPLICIT_EFFORTS.has(obj[key])) {
     delete obj[key];
+    return;
   }
+  const alias = EFFORT_ALIASES[obj[key]];
+  if (alias) obj[key] = alias;
 }
 
 // Mutates and returns a shallow-cloned body safe to send to the relay.

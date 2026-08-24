@@ -127,6 +127,20 @@ describe("mirasim signer", () => {
   });
 });
 
+describe("mirasim provider notice", () => {
+  it("surfaces client compatibility in the dashboard notice", async () => {
+    const { PROVIDER_DISPLAY } = await import("@/shared/constants/providersDisplay");
+    const display = PROVIDER_DISPLAY.mirasim;
+    expect(display).toBeDefined();
+    // rendered as an info box only when the provider is not deprecated/experimental
+    expect(display.deprecated).toBeUndefined();
+    expect(display.experimental).toBeUndefined();
+    expect(display.notice?.text).toMatch(/Claude Code/);
+    expect(display.notice?.text).toMatch(/rejects harnesses it does not recognise/);
+    expect(display.notice?.signupUrl).toBe("https://mirasim.ai");
+  });
+});
+
 describe("mirasim context windows", () => {
   const ctx = async (model) => {
     const { getCapabilitiesForModel } = await import("open-sse/providers/capabilities.js");
@@ -151,7 +165,7 @@ describe("mirasim context windows", () => {
   it("preserves non-window capabilities through the provider override", async () => {
     // a provider override short-circuits the fallback chain, so these must be restated
     const opus = await ctx("claude-opus-5");
-    expect(opus).toMatchObject({ vision: true, search: true, reasoning: true, thinkingFormat: "claude-budget" });
+    expect(opus).toMatchObject({ vision: true, search: true, reasoning: true, thinkingFormat: "claude-adaptive" });
     expect((await ctx("claude-opus-4-7")).maxOutput).toBe(128000);
   });
 
@@ -175,6 +189,56 @@ describe("mirasim context windows", () => {
   it("keeps other metadata intact when defaulting the window", () => {
     const out = sanitizeMirasimBody({ model: "claude-opus-5", metadata: { user_id: "u1" } });
     expect(out.metadata).toEqual({ user_id: "u1", autoCompactWindow: true });
+  });
+});
+
+describe("mirasim thinking effort", () => {
+  const capsFor = async (model) => {
+    const { getCapabilitiesForModel } = await import("open-sse/providers/capabilities.js");
+    return getCapabilitiesForModel("mirasim", model);
+  };
+
+  it("classifies the adaptive tiers as claude-adaptive", async () => {
+    for (const model of ["claude-opus-5", "claude-sonnet-5", "claude-opus-4-8", "claude-opus-4-7"]) {
+      expect((await capsFor(model)).thinkingFormat, model).toBe("claude-adaptive");
+    }
+  });
+
+  it("keeps Haiku on the budget format the relay accepts for it", async () => {
+    expect((await capsFor("claude-haiku-4-5")).thinkingFormat).toBe("claude-budget");
+  });
+
+  it("delivers low/high as output_config.effort on adaptive models", async () => {
+    const { applyThinking } = await import("open-sse/translator/concerns/thinkingUnified.js");
+    for (const level of ["low", "medium", "high"]) {
+      const body = { model: "claude-opus-5", max_tokens: 100, reasoning_effort: level };
+      applyThinking("claude", "claude-opus-5", body, "mirasim");
+      const out = sanitizeMirasimBody(body);
+      // survives the sanitizer rather than being stripped as a fixed budget
+      expect(out.output_config, level).toEqual({ effort: level });
+      expect(out.thinking).toBeUndefined();
+    }
+  });
+
+  it("still sends Haiku a token budget", async () => {
+    const { applyThinking } = await import("open-sse/translator/concerns/thinkingUnified.js");
+    const body = { model: "claude-haiku-4-5", max_tokens: 100, reasoning_effort: "high" };
+    applyThinking("claude", "claude-haiku-4-5", body, "mirasim");
+    const out = sanitizeMirasimBody(body);
+    expect(out.thinking?.type).toBe("enabled");
+    expect(out.thinking?.budget_tokens).toBeGreaterThan(0);
+  });
+
+  it("maps efforts outside the relay's enum onto supported levels", () => {
+    expect(sanitizeMirasimBody({ model: "claude-opus-5", output_config: { effort: "minimal" } }).output_config)
+      .toEqual({ effort: "low" });
+    expect(sanitizeMirasimBody({ model: "claude-opus-5", output_config: { effort: "xhigh" } }).output_config)
+      .toEqual({ effort: "high" });
+    // real enum values are untouched
+    for (const eff of ["low", "medium", "high", "max"]) {
+      expect(sanitizeMirasimBody({ model: "claude-opus-5", output_config: { effort: eff } }).output_config)
+        .toEqual({ effort: eff });
+    }
   });
 });
 
