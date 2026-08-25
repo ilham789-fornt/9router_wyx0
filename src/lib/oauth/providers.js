@@ -23,6 +23,8 @@ import {
   KIMI_CODING_CONFIG,
   KILOCODE_CONFIG,
   CLINE_CONFIG,
+  CLINEPASS_CONFIG,
+  GROK_CLI_CONFIG,
   GITLAB_CONFIG,
   CODEBUDDY_CONFIG,
   CODEBUDDY_CN_CONFIG,
@@ -1587,6 +1589,190 @@ const PROVIDERS = {
       expiresIn: null,
       email: tokens._userEmail,
       ...(tokens._orgId ? { providerSpecificData: { orgId: tokens._orgId } } : {}),
+    }),
+  },
+
+  "grok-cli": {
+    config: GROK_CLI_CONFIG,
+    flowType: "device_code",
+    requestDeviceCode: async (config) => {
+      const body = new URLSearchParams({
+        client_id: config.clientId,
+        scope: config.scope,
+      });
+      // Official CLI sends referrer=grok-build
+      if (config.referrer) body.set("referrer", config.referrer);
+
+      const response = await fetch(config.deviceCodeUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+          Accept: "application/json",
+          "User-Agent": "grok-pager/0.2.93 grok-shell/0.2.93 (linux; x86_64)",
+        },
+        body,
+      });
+
+      if (!response.ok) {
+        const error = await response.text();
+        throw new Error(`Grok CLI device code request failed: ${error}`);
+      }
+
+      return await response.json();
+    },
+    pollToken: async (config, deviceCode) => {
+      const response = await fetch(config.tokenUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+          Accept: "application/json",
+          "User-Agent": "grok-pager/0.2.93 grok-shell/0.2.93 (linux; x86_64)",
+        },
+        body: new URLSearchParams({
+          grant_type: "urn:ietf:params:oauth:grant-type:device_code",
+          device_code: deviceCode,
+          client_id: config.clientId,
+        }),
+      });
+
+      let data;
+      try {
+        data = await response.json();
+      } catch {
+        const text = await response.text();
+        data = { error: "invalid_response", error_description: text };
+      }
+
+      // Device flow: 400 + authorization_pending is expected while user authorizes
+      const pending =
+        data?.error === "authorization_pending" ||
+        data?.error === "slow_down";
+      return {
+        ok: response.ok || pending,
+        data,
+      };
+    },
+    postExchange: async (tokens) => {
+      // Best-effort user profile from cli-chat-proxy (non-fatal)
+      try {
+        const res = await fetch("https://cli-chat-proxy.grok.com/v1/user", {
+          headers: {
+            Authorization: `Bearer ${tokens.access_token}`,
+            Accept: "application/json",
+            "User-Agent": "grok-pager/0.2.93 grok-shell/0.2.93 (linux; x86_64)",
+            "x-xai-token-auth": "xai-grok-cli",
+            "x-grok-client-version": "0.2.93",
+          },
+        });
+        if (res.ok) return { user: await res.json() };
+      } catch {
+        /* ignore */
+      }
+      return { user: null };
+    },
+    mapTokens: (tokens, extra) => {
+      const email =
+        decodeXaiIdTokenEmail(tokens.id_token) ||
+        extractEmailFromAccessToken(tokens.access_token) ||
+        extra?.user?.email ||
+        null;
+      const userId =
+        extra?.user?.userId ||
+        extra?.user?.principalId ||
+        null;
+      const displayName = [extra?.user?.firstName, extra?.user?.lastName]
+        .filter(Boolean)
+        .join(" ")
+        .trim() || null;
+
+      const expiresAt = tokens.expires_in
+        ? new Date(Date.now() + tokens.expires_in * 1000).toISOString()
+        : null;
+
+      return {
+        accessToken: tokens.access_token,
+        refreshToken: tokens.refresh_token || null,
+        expiresIn: tokens.expires_in,
+        // Surface an absolute expiry so the proactive refresh path
+        // (shouldRefreshCredentials / checkAndRefreshToken) can refresh the
+        // xAI token before it silently expires ~40-45 min after login.
+        // Without this, only the reactive 401 path in chatCore would refresh,
+        // causing intermittent "token expired" failures for Grok CLI.
+        expiresAt,
+        scope: tokens.scope,
+        // Top-level for dashboard connection cards
+        email: email || undefined,
+        displayName: displayName || undefined,
+        // Mirror identity into providerSpecificData so GrokCliExecutor can set
+        // x-email / x-userid without depending on top-level credential shape.
+        providerSpecificData: {
+          authMethod: "device_code",
+          idToken: tokens.id_token || null,
+          email: email || null,
+          userId,
+          hasGrokCodeAccess: extra?.user?.hasGrokCodeAccess ?? null,
+          subscriptionTier: extra?.user?.subscriptionTier ?? null,
+        },
+      };
+    },
+    },
+
+  clinepass: {
+    config: CLINEPASS_CONFIG,
+    flowType: "authorization_code",
+    buildAuthUrl: (config, redirectUri) => {
+      const params = new URLSearchParams({
+        client_type: "extension",
+        callback_url: redirectUri,
+        redirect_uri: redirectUri,
+      });
+      return `${config.authorizeUrl}?${params.toString()}`;
+    },
+    exchangeToken: async (config, code, redirectUri) => {
+      try {
+        // Cline encodes token data as base64 in the code param
+        let base64 = code;
+        const padding = 4 - (base64.length % 4);
+        if (padding !== 4) base64 += "=".repeat(padding);
+        const decoded = Buffer.from(base64, "base64").toString("utf-8");
+        const lastBrace = decoded.lastIndexOf("}");
+        if (lastBrace === -1) throw new Error("No JSON found in decoded code");
+        const tokenData = JSON.parse(decoded.substring(0, lastBrace + 1));
+        return {
+          access_token: tokenData.accessToken,
+          refresh_token: tokenData.refreshToken,
+          email: tokenData.email,
+          firstName: tokenData.firstName,
+          lastName: tokenData.lastName,
+          expires_at: tokenData.expiresAt,
+        };
+      } catch {
+        const response = await fetch(config.tokenUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Accept: "application/json" },
+          body: JSON.stringify({ grant_type: "authorization_code", code, client_type: "extension", redirect_uri: redirectUri }),
+        });
+        if (!response.ok) {
+          const error = await response.text();
+          throw new Error(`ClinePass token exchange failed: ${error}`);
+        }
+        const data = await response.json();
+        return {
+          access_token: data.data?.accessToken || data.accessToken,
+          refresh_token: data.data?.refreshToken || data.refreshToken,
+          email: data.data?.userInfo?.email || "",
+          expires_at: data.data?.expiresAt || data.expiresAt,
+        };
+      }
+    },
+    mapTokens: (tokens) => ({
+      accessToken: tokens.access_token,
+      refreshToken: tokens.refresh_token,
+      expiresIn: tokens.expires_at
+        ? Math.floor((new Date(tokens.expires_at).getTime() - Date.now()) / 1000)
+        : 3600,
+      email: tokens.email,
+      providerSpecificData: { firstName: tokens.firstName, lastName: tokens.lastName },
     }),
   },
 

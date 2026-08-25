@@ -8,6 +8,7 @@ import { getGeminiUsage, getAntigravityUsage } from "./usage/google.js";
 import { getClaudeUsage } from "./usage/claude.js";
 import { getCodexUsage, consumeCodexRateLimitResetCredit } from "./usage/codex.js";
 import { getCodeBuddyCnUsage } from "./usage/codebuddy-cn.js";
+import { getGrokCliUsage } from "./usage/grok-cli.js";
 // CodeBuddy CN auth/metadata helpers live in ./codebuddyCn.js and are consumed
 // directly by ./usage/codebuddy-cn.js. The legacy inline CN usage handler that
 // used them from this file was replaced during the v0.5.8 sync.
@@ -62,6 +63,7 @@ const USAGE_HANDLERS = {
   "minimax-cn": (c) => getMiniMaxUsage(c.apiKey, c.provider, c.proxyOptions),
   "vercel-ai-gateway": (c) => getVercelAiGatewayUsage(c.apiKey, c.proxyOptions),
   "codebuddy-cn": (c) => getCodeBuddyCnUsage(c.accessToken, c.apiKey, c.providerSpecificData, c.proxyOptions),
+  "grok-cli": (c) => getGrokCliUsage(c.accessToken, c.providerSpecificData, c.proxyOptions),
   mirasim: (c) => getMirasimUsage(
     { accessToken: c.accessToken, refreshToken: c.refreshToken, providerSpecificData: c.providerSpecificData },
     c.proxyOptions,
