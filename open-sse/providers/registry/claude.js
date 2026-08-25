@@ -60,6 +60,13 @@ export default {
     },
   },
   models: [
+    { id: "claude-opus-5", name: "Claude Opus 5" },
+    { id: "claude-fable-5", name: "Claude Fable 5" },
+    { id: "claude-sonnet-5", name: "Claude Sonnet 5" },
+    // Upstream dropped the 4.x ids when it added the 5-series. They are kept here
+    // because a connection, combo, or CLI Tools slot may already name one, and
+    // silently removing the id turns that into an unresolvable model rather than a
+    // deliberate choice by the operator.
     { id: "claude-opus-4-8", name: "Claude Opus 4.8" },
     { id: "claude-opus-4-7", name: "Claude Opus 4.7" },
     { id: "claude-opus-4-6", name: "Claude Opus 4.6" },
