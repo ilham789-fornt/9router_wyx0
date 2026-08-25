@@ -6,6 +6,7 @@ import { AI_PROVIDERS, getProviderAlias } from "@/shared/constants/providers";
 import { getModelsByProviderId, getModelKind } from "@/shared/constants/models";
 import { useCopyToClipboard } from "@/shared/hooks/useCopyToClipboard";
 import { TTS_PROVIDER_CONFIG } from "@/shared/constants/ttsProviders";
+import { translate } from "@/i18n/runtime";
 import { getTtsVoicesForModel } from "open-sse/config/ttsModels.js";
 import { GOOGLE_TTS_LANGUAGES } from "open-sse/config/googleTtsLanguages.js";
 import { Row } from "./exampleShared";
@@ -40,6 +41,7 @@ export function TtsExampleCard({ providerId }) {
 
   // Form state
   const [input, setInput]               = useState("Hello, this is a text to speech test.");
+  const [style, setStyle]               = useState(""); // style/voice instructions (e.g. MiMo voicedesign)
   const [apiKey, setApiKey]             = useState("");
   const [useTunnel, setUseTunnel]       = useState(false);
   const [localEndpoint, setLocalEndpoint]   = useState("");
@@ -111,6 +113,10 @@ export function TtsExampleCard({ providerId }) {
     if (voices.length) {
       setSelectedVoice(voices[0].id);
       setSelectedVoiceName(voices[0].name || voices[0].id);
+    } else {
+      // Model has no preset voices (voicedesign/voiceclone) — drop stale voice
+      setSelectedVoice("");
+      setSelectedVoiceName("");
     }
   }, [selectedModel]);
 
@@ -184,6 +190,7 @@ export function TtsExampleCard({ providerId }) {
   const ttsBody = (() => {
     const b = { model: modelFull, input };
     if (config.hasLanguageHint && languageHint) b.language = languageHint;
+    if (config.hasStyleInput && style.trim()) b.style = style.trim();
     return b;
   })();
   const curlSnippet = `curl -X POST ${endpoint}/v1/audio/speech${responseFormat === "json" ? "?response_format=json" : ""} \\
@@ -218,7 +225,8 @@ export function TtsExampleCard({ providerId }) {
       if (responseFormat === "json") {
         const data = await res.json();
         setJsonResponse(data); // Store full JSON response
-        const audioBlob = await fetch(`data:audio/mp3;base64,${data.audio}`).then(r => r.blob());
+        const format = data.format || "mp3";
+        const audioBlob = await fetch(`data:audio/${format};base64,${data.audio}`).then(r => r.blob());
         setAudioUrl(URL.createObjectURL(audioBlob));
       } else {
         const blob = await res.blob();
@@ -290,9 +298,11 @@ export function TtsExampleCard({ providerId }) {
                 className="w-full px-3 py-1.5 text-sm border border-border rounded-lg bg-background focus:outline-none focus:border-primary"
               >
                 <option value="">Auto-detect</option>
-                {GOOGLE_TTS_LANGUAGES.map((l) => (
-                  <option key={l.id} value={l.name}>{l.name}</option>
-                ))}
+                {(config.languageOptions || GOOGLE_TTS_LANGUAGES).map((l) =>
+                  typeof l === "string"
+                    ? <option key={l} value={l}>{l}</option>
+                    : <option key={l.id} value={l.name}>{l.name}</option>
+                )}
               </select>
             </Row>
           )}
@@ -417,6 +427,30 @@ export function TtsExampleCard({ providerId }) {
               )}
             </div>
           </Row>
+
+          {/* Style / voice instructions (Xiaomi MiMo) */}
+          {config.hasStyleInput && (
+            <Row label={translate("Style")}>
+              <div className="relative">
+                <textarea
+                  value={style}
+                  onChange={(e) => setStyle(e.target.value)}
+                  placeholder={translate("e.g. a warm, gentle voice, speaking slowly with a British accent")}
+                  rows={2}
+                  className="w-full px-3 py-1.5 pr-7 text-sm border border-border rounded-lg bg-background focus:outline-none focus:border-primary resize-none"
+                />
+                {style && (
+                  <button
+                    type="button"
+                    onClick={() => setStyle("")}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-text-muted hover:text-primary transition-colors"
+                  >
+                    <span className="material-symbols-outlined text-[14px]">close</span>
+                  </button>
+                )}
+              </div>
+            </Row>
+          )}
 
           {/* Output Format */}
           <Row label="Output Format">
