@@ -9,7 +9,7 @@ Continue the selective sync of `decolua/9router` into the WYx0 fork without dele
 - Repo: `C:\_General\project_gabut\9router_wyx0`
 - Branch: `master`
 - Worktree: clean at handoff creation
-- Local `HEAD`: `74f41b91`
+- Local `HEAD`: `19ea6db6`
 - `upstream/master`: `699edac3` (unchanged since the previous handoff; upstream has published nothing newer)
 - Upstream push URL remains disabled.
 - Binding contracts: root `AGENTS.md` and child DOX files. Sync history and deferred items are documented in `README.md` under “Upstream Synchronization Status.”
@@ -23,6 +23,9 @@ Selective batches were ported and pushed directly to `master`. Recent batches in
 - Structured Anthropic token counting, provider-wide parameter rules, custom compatible-provider prefix resolution in translator debugging, Windows RTK `find` support, and dashed Claude Opus 4.7 capabilities.
 - Jina Reader JSON POST transport, title/error preservation, and successful-fetch account recovery.
 - Provider and CLI feature catch-up: the CLI launcher startup path and menu model lists, thirteen api-key providers, five media providers with their handlers, and Xiaomi MiMo TTS.
+- CLI Tools repair: Kiro MITM domain and model slots, Antigravity dashboard model list, and the Claude Code Fable/context-window/Exa controls. This fixed two tests that were already failing against our own code.
+- Gemini-native `v1beta/models` passthrough and the Cursor HTTP/2 agent stream.
+- Provider registry parity completed with `grok-cli`, `kimchi`, `devin-cli`, `clinepass` and `tokenrouter`.
 
 Refer to `README.md`, `git log`, and individual commits for patch details.
 
@@ -38,21 +41,16 @@ comm -13 <(git ls-tree -r --name-only HEAD | sort) \
          <(git ls-tree -r --name-only upstream/master | sort)
 ```
 
-Remaining unported providers and the infrastructure each needs:
-
-- `grok-cli` — executor, `config/grokCli.js`, `services/grokCliModels.js`, usage handler, OAuth wiring.
-- `clinepass` — `services/clinepassModels.js`, OAuth wiring.
-- `kimchi` — executor plus `services/kimchiModels.js`.
-- `devin-cli` — executor; `authType: "none"`.
-- `tokenrouter` — api-key only, but introduces `thinkingFormat: "tokenrouter"`, a value `translator/concerns/thinkingUnified.js` does not yet know.
-- `codebuddy-intl` and `tencent` stay excluded under the Fork Preservation Rule.
+Provider registry parity is COMPLETE as of the latest batch: 124 entries, with
+only `codebuddy-intl` and `tencent` absent by the documented Fork Preservation
+decision. Do not reopen this as a gap.
 
 Other unported areas: the `xai video` pipeline (CLI command, `handlers/videoCore.js`, `src/sse/handlers/videoGeneration.js`, four `/v1/videos` routes), `cli/scripts/build-cli.js` and `tray.ps1` packaging, and the `rtk` modules (`headroom.js`, `pxpipe.js`, `systemInject.js`, `ponytailPrompt.js`, `filters/gitLog.js`).
 
 ## Verification baseline
 
 - Production `npm run build`: green, 126 pages.
-- Latest full-suite run: 20 failing files and 42 failed assertions, 1524 passing. This is the current established baseline; compare against it rather than the older 19/33 figure.
+- Latest full-suite run: 18 failing files and 40 failed assertions, 1541 passing. This is the current established baseline; two files that failed at the older 20/42 baseline (kiro-model-slots, antigravity-mitm) were fixed by the CLI Tools batch.
 - Full-suite runs can additionally time out in untouched external/live tests such as Trae/Windsurf profile exchange and MiMo Free.
 - Fork-only test audit: 68 selected files executed. Existing fork failures remain in Gemini Web, CodeBuddy CN automation, and source-path/no-suite checks.
 - Fork preservation audit at the latest batch boundary: 218 fork-only files; missing now: 0.
@@ -70,7 +68,7 @@ Do not blindly port these; reasons are documented in `README.md` and root `AGENT
 - Headroom Responses history patch: target module is absent until Headroom lands.
 - Upstream `codebuddy-intl`, `workbuddy`, Tencent/CN provider overlap: WYx0 implementations are richer and protected.
 - API-key management/custom-model dashboard refactors: heavily diverged UI files.
-- Rotating refresh-token wrapper: no active `xai`/`grok-cli` refresher in WYx0 `DefaultExecutor`.
+- Rotating refresh-token wrapper: still deferred, but the premise changed. `grok-cli` now exists here and refreshes via `REFRESH_HANDLERS["grok-cli"]` reusing `refreshXaiToken`; re-evaluate the wrapper against that rather than assuming no refresher is present.
 - Native Gemini path guard: no equivalent vulnerable direct-URL path in this fork.
 - Standalone asset-copy and tunnel PID fixes: not yet ported; require separate review against WYx packaging/runtime.
 

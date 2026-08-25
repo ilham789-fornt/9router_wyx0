@@ -186,6 +186,15 @@ Earlier batches ported only security, compatibility, translator, identity, and u
 - Still unported and tracked: `clinepass`, `devin-cli`, `grok-cli`, `kimchi`, `tokenrouter`, the `xai video` pipeline, `build-cli.js`/`tray.ps1` packaging, and the `rtk` modules. `codebuddy-intl` and `tencent` stay excluded under the Fork Preservation Rule.
 - Verification: registry loads 119 entries with no duplicate ids; upstream `xiaomi-mimo-tts` test ported and green; full suite holds the pre-batch baseline of 20 failing files and 42 failing assertions with passing tests up 1472 to 1524; production build green.
 
+### Provider registry parity
+
+The registry now holds 124 entries. The only upstream providers absent are `codebuddy-intl` and `tencent`, both excluded permanently under the Fork Preservation Rule because this fork's `codebuddy` and `codebuddy-cn` are richer. Provider coverage is therefore a closed item rather than an open gap.
+
+- Completed with the five that needed execution infrastructure: `grok-cli` (executor, config, models service, usage handler and credits-frame decoder, device-code OAuth), `kimchi` (executor + models service), `devin-cli` (local-binary executor, no auth), `clinepass` (models service + authorization-code OAuth), and `tokenrouter` (registry plus a `thinkingUnified` case, since its effort enum takes `max` natively and rejects `none`/`auto`).
+- OAuth for `grok-cli` and `clinepass` was added to the fork's single-file `src/lib/oauth/providers.js`, not upstream's `src/lib/oauth/providers/` split, which root `AGENTS.md` records as a collision point.
+- `open-sse/executors/index.js` was edited surgically. Upstream's copy carries no `qwen`, `opencode-go`, `gemini-web` or `mirasim` executor, so adopting it wholesale would have dropped four protected providers.
+- Known upstream defect, not reproduced here: upstream's `tests/unit/kimchi.test.js` asserts `category: "oauth"` while its own registry entry says `freeTier`. The entry was ported faithfully and the test was not.
+
 ### Ported from upstream v0.5.4 → v0.5.8
 
 **Security**
