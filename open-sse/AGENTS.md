@@ -43,10 +43,18 @@
 - Under the root Fork Preservation Rule, keep the WYx0 `codebuddy` and `codebuddy-cn` registries, their aliases, and the CodeBuddy-aware branches in `executors/default.js` and `handlers/chatCore.js`. Upstream's `codebuddy-intl` and `tencent` entries must not shadow or replace them.
 - CodeBuddy streaming may buffer a first tiny non-empty completion and retry once before exposing bytes; if the retry fails or is not a successful SSE response, replay the original buffered stream.
 - Porting the upstream `resolveTransport`/`runtimeTransport` multi-endpoint refactor requires threading the new transport through the CodeBuddy execution path first; it is not a drop-in replacement for this subtree's executor dispatch.
+- No consumer reads a registry `transports[]` array while that refactor is deferred; do not copy the field from upstream entries, because it advertises per-format routing this subtree does not perform.
+- `selfhosted-embedding` keeps its own adapter and must never route through `openaiCompatNode`, which defaults to `api.openai.com` when a connection sets no base URL; under a self-hosted provider that silently sends input and credentials to a third party.
+- `embeddingsCore` builds url, headers, and body inside a guard and answers `400` with the adapter's reason, so a misconfigured connection is a client error rather than an uncaught `500`.
+- STT and TTS resolve a per-connection `providerSpecificData.baseUrl` override ahead of the registry base URL. The override is opt-in and absent for cloud providers, whose fixed registry endpoints stay authoritative.
+- TTS providers may keep their model list under `ttsConfig.models` instead of the migrated top-level `models[]`; the dashboard TTS card and `TTS_PROVIDER_CONFIG` both read that nested shape.
+- `handleTtsCore` forwards `style` alongside `language` to the adapter; a route that collects either hint must thread it through `src/sse/handlers/tts.js` or the adapter never receives it.
 
 ## Work Guidance
 
-- Add a provider by copying `providers/REGISTRY_TEMPLATE.js` to `providers/registry/<id>.js` and adding its models to `config/providerModels.js`.
+- Add a provider by copying `providers/REGISTRY_TEMPLATE.js` to `providers/registry/<id>.js`, then regenerate `providers/registry/index.js`. Models are co-located in the registry entry; `config/providerModels.js` derives `PROVIDER_MODELS` from it and needs no edit.
+- Check a new provider's `id`, `alias`, `aliases`, and `uiAlias` against every existing entry before adding it; the registry is keyed by alias, so a collision silently shadows a provider.
+- An OpenAI-format api-key provider usually needs no route changes: the generic probe in `src/app/api/providers/validate/route.js` and the registry's own seed models plus `passthroughModels` cover it.
 - Add a custom executor only for non-standard upstream behavior; otherwise rely on `DefaultExecutor`.
 - Add translators through the existing registration pattern, import registration modules from `translator/index.js`, and reuse translator schema and concern helpers.
 - Trace both request and response paths before changing format conversion, fallback, or stream handling.

@@ -84,6 +84,8 @@ comm -23 <(git ls-tree -r --name-only HEAD | sort) \
 - CodeBuddy CN activation lifecycle, gateway-probation handling, and 5sim SMS registration.
 - Proxy pool scraper with live verification before storage, plus bulk-import proxy resolution.
 - Gemini Web provider and cookie auto-capture.
+- Mirasim app-less relay provider: `open-sse/executors/mirasim.js`, `shared/mirasimSigner.js`, `shared/mirasimSanitize.js`, `services/usage/mirasim.js`, `src/lib/mirasim/`, the `/api/oauth/mirasim/import-local` route, and `MirasimAuthModal`. Upstream has no equivalent; the device-signing scheme is what makes the relay reachable without the desktop app.
+- Fork-only registry entries `alibaba-image`, `codebuddy`, `gemini-web`, `kimi-coding`, `mirasim`, and `qwen`; regenerating `open-sse/providers/registry/index.js` must keep all six.
 - Temp-mail allocation, IMAP OTP reading, and GitHub signup automation.
 - Codex gateway account pinning, provider disable/availability utilities, connection bulk actions, and Quota Tracker pagination and display modes.
 - `mergeAccountsAndProxyPoolsFromDb` merge-on-import behavior.

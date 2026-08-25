@@ -149,7 +149,7 @@ This fork's current PR scope is intentionally centered on WYx0 changes:
 
 ## Upstream Synchronization Status
 
-Last general sync: **upstream `v0.5.8` (`0c47c891`)**. Reviewed security, compatibility, translator, identity, and usage fixes are ported through **upstream `v0.5.55` (`699edac3`)**. Sync method: selective per-commit cherry-pick/manual port onto the WYx0 line (not a wholesale merge), preserving all WYx0-only features.
+Last general sync: **upstream `v0.5.8` (`0c47c891`)**. Reviewed security, compatibility, translator, identity, and usage fixes are ported through **upstream `v0.5.55` (`699edac3`)**, and provider/CLI features from that line are being ported in batches (see below). Sync method: selective per-commit cherry-pick/manual port onto the WYx0 line (not a wholesale merge), preserving all WYx0-only features.
 
 ### Security/OAuth batch from upstream v0.5.55
 
@@ -172,6 +172,19 @@ Last general sync: **upstream `v0.5.8` (`0c47c891`)**. Reviewed security, compat
 - Expanded Anthropic token estimates to structured system/tool/thinking content, fixed provider-wide parameter transforms, resolved custom compatible-provider prefixes in translator debugging, supported Windows RTK `find` output, and added the dashed Claude Opus 4.7 capability override.
 - Updated Jina Reader to its root JSON POST API, preserved metadata/upstream errors, and made successful web fetches clear stale account status, error code, and backoff only after the provider core actually succeeds.
 - Verification for each completed batch: focused regressions and production build green; full-suite failing-file and assertion sets unchanged; no protected fork-only file removed.
+
+### Provider and CLI feature batches from upstream v0.5.55
+
+Earlier batches ported only security, compatibility, translator, identity, and usage fixes past `v0.5.8`, so upstream *features* from the `v0.5.12`-`v0.5.55` line were never brought over. The registry held 101 entries against upstream's 120, and the CLI launcher had not moved since `v0.5.8`. These batches close that gap.
+
+- CLI launcher: TCP readiness polling replaces the fixed 2s/3s startup waits, the update check moved off the critical path, MITM and tunnel teardown moved off the critical path, and both spawns take `--dns-result-order=ipv4first`. Added the Antigravity `gemini-3.7`/`3.6-flash` tiers, Kiro `claude-sonnet-5`, and Gemini `gemini-3.6-flash`/`gemini-3.5-flash-lite` to the CLI menus. Relabelled the api-key provider `kimi` to "Kimi", which previously carried the display name of this fork's distinct `kimi-coding` provider.
+- Api-key providers: `alims-intl`, `alitp-intl`, `api-airforce`, `baidu`, `bazaarlink`, `bluesminds`, `featherless`, `kilo-gateway`, `llm7`, `morph`, `poolside`, `sambanova`, `venice`. All are OpenAI-format and route through `DefaultExecutor` and the generic validate probe; `alims-intl` additionally gets an explicit validate case and models-listing config, as upstream has.
+- Media providers: `fish-audio` (TTS format handler), `perplexity-agent` (chat-search config), `selfhosted-tts`, `selfhosted-stt`, and `selfhosted-embedding`, plus the per-connection base-URL override that self-hosted endpoints need and a request-build guard in `embeddingsCore` that turns a misconfigured connection into a `400` instead of an uncaught `500`.
+- Xiaomi MiMo TTS, which this fork was missing despite already shipping the MiMo provider: adapter, `ttsConfig`, `mimo-v2.5-tts`, nine preset voices, and the dashboard style input threaded through to the adapter. Also the Gemini 3.1 Flash TTS model and a JSON-playback fix that honours the returned audio format.
+- Fork behavior explicitly preserved against these diffs: CLI port `20129`, `wyxrouter` package identity, mandatory `custom-server.js` startup, the fork-only `NODE_PATH` parent entry, and all six fork-only providers through the registry regeneration.
+- Deliberately not ported: the registry `transports[]` array on `xiaomi-mimo` (belongs to the deferred `resolveTransport` refactor and has no consumer here), the CLI Headroom toggle (nothing server-side consumes `headroomEnabled`), and unrelated dashboard churn in `TtsExampleCard`.
+- Still unported and tracked: `clinepass`, `devin-cli`, `grok-cli`, `kimchi`, `tokenrouter`, the `xai video` pipeline, `build-cli.js`/`tray.ps1` packaging, and the `rtk` modules. `codebuddy-intl` and `tencent` stay excluded under the Fork Preservation Rule.
+- Verification: registry loads 119 entries with no duplicate ids; upstream `xiaomi-mimo-tts` test ported and green; full suite holds the pre-batch baseline of 20 failing files and 42 failing assertions with passing tests up 1472 to 1524; production build green.
 
 ### Ported from upstream v0.5.4 → v0.5.8
 
