@@ -385,7 +385,14 @@ export class BaseBulkImportManager {
 
   // ── Job Lifecycle ────────────────────────────────────────────────────────
 
-  startJob({ parsedAccounts, concurrency, browser, browserLaunchOptions = null, prelaunchedBrowsers = null }) {
+  startJob({
+    parsedAccounts,
+    concurrency,
+    browser,
+    browserLaunchOptions = null,
+    prelaunchedBrowsers = null,
+    configureJob = null,
+  }) {
     if (!parsedAccounts.length) {
       throw Object.assign(new Error("At least one account entry is required"), { error: "At least one account entry is required" });
     }
@@ -427,6 +434,11 @@ export class BaseBulkImportManager {
         logs: [createLogEntry("queued", "Queued and waiting for an available worker")],
       })),
     };
+
+    // Provider-specific execution mode must be attached before the job becomes
+    // visible or runJob starts. Setting it after startJob returns creates a
+    // timing dependency where a worker can observe incomplete job metadata.
+    configureJob?.(job);
 
     this.jobs.set(jobId, job);
     this.latestJobId = jobId;
@@ -721,7 +733,11 @@ export class BaseBulkImportManager {
           ? "cancelled"
           : "completed";
       } else {
-        job.status = "completed";
+        const summary = buildSummary(job.accounts);
+        job.status = summary.success === 0 && summary.failed > 0 ? "failed" : "completed";
+        if (job.status === "failed" && !job.error) {
+          job.error = job.accounts.find((account) => account.error)?.error || `${this.providerLabel} job failed.`;
+        }
       }
       await this.persistJobSnapshot(job, { forcePreview: true });
     } catch (error) {

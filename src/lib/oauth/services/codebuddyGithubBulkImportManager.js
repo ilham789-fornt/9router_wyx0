@@ -365,14 +365,14 @@ export async function defaultSaveCodeBuddyGithubConnection({
   return { connection };
 }
 
-export async function defaultRequestDeviceCode(providerId) {
+export async function defaultRequestDeviceCode(providerId, options) {
   const { requestDeviceCode } = await import("../providers.js");
-  return requestDeviceCode(providerId);
+  return requestDeviceCode(providerId, null, options);
 }
 
-export async function defaultPollForToken(providerId, deviceCode) {
+export async function defaultPollForToken(providerId, deviceCode, extraData) {
   const { pollForToken } = await import("../providers.js");
-  return pollForToken(providerId, deviceCode);
+  return pollForToken(providerId, deviceCode, null, extraData);
 }
 
 // ── Cookie Capture ─────────────────────────────────────────────────────────
@@ -517,7 +517,7 @@ export async function defaultCreateCodeBuddyApiKeyTokens({ page, tokens = {}, on
 // ── Token Polling (unchanged from Google flow) ─────────────────────────────
 
 export function createCodeBuddyPollPromise({
-  deviceCode, pollToken, onStep, signal, shouldCancel, onPending,
+  deviceCode, pollToken, proxyUrl, onStep, signal, shouldCancel, onPending,
   timeoutMs = CODEBUDDY_POLL_TIMEOUT_MS,
   pollIntervalMs = CODEBUDDY_POLL_INTERVAL_MS,
   maxTransientErrors = CODEBUDDY_MAX_TRANSIENT_POLL_ERRORS,
@@ -537,7 +537,7 @@ export function createCodeBuddyPollPromise({
       }
 
       pollAttempt += 1;
-      const result = await pollToken(CODEBUDDY_PROVIDER_ID, deviceCode);
+      const result = await pollToken(CODEBUDDY_PROVIDER_ID, deviceCode, { proxyUrl });
       if (result.success) {
         onStep?.("codebuddy_token_received", `CodeBuddy OAuth token received after ${pollAttempt} poll attempt${pollAttempt === 1 ? "" : "s"}`);
         return { tokens: result.tokens };
@@ -683,15 +683,17 @@ export class CodeBuddyGithubBulkImportManager extends BaseBulkImportManager {
         headless: headless !== false,
         proxy: proxyByLine.get(account.line),
       }),
+      configureJob: (job) => {
+        job.proxyPoolId = resolvedProxy?.proxyPoolId || null;
+        job.proxySource = resolvedProxy?.proxySource || null;
+        job.proxyChecked = resolvedProxy?.proxyChecked || null;
+        job.socialProvider = "github";
+        job.headlessRequested = headless !== false;
+        job.accounts.forEach((account) => {
+          account.oauthProxyUrl = proxyByLine.get(account.line);
+        });
+      },
     });
-    const job = this.jobs.get(sanitizedJob.jobId);
-    if (job) {
-      job.proxyPoolId = resolvedProxy?.proxyPoolId || null;
-      job.proxySource = resolvedProxy?.proxySource || null;
-      job.proxyChecked = resolvedProxy?.proxyChecked || null;
-      job.socialProvider = "github";
-      job.headlessRequested = headless !== false;
-    }
     return this.getJob(sanitizedJob.jobId);
   }
 
@@ -788,8 +790,8 @@ export class CodeBuddyGithubBulkImportManager extends BaseBulkImportManager {
       this.setAccountStep(account, "preparing_worker", `Worker ${workerId} is preparing a browser context (GitHub SSO)`);
       await this.persistJobSnapshot(job, { forcePreview: true });
 
-      this.setAccountStep(account, "requesting_codebuddy_state", "Requesting CodeBuddy OAuth state");
-      const deviceData = await this.requestDeviceCode(CODEBUDDY_PROVIDER_ID);
+      this.setAccountStep(account, "requesting_codebuddy_state", "Requesting CodeBuddy OAuth state through the account proxy");
+      const deviceData = await this.requestDeviceCode(CODEBUDDY_PROVIDER_ID, { proxyUrl: account.oauthProxyUrl });
       const authUrl = normalizeCodeBuddyAuthUrl(deviceData.verification_uri, deviceData.device_code);
       if (!authUrl || !deviceData.device_code) {
         throw new Error("CodeBuddy did not return an OAuth login URL");
@@ -811,6 +813,7 @@ export class CodeBuddyGithubBulkImportManager extends BaseBulkImportManager {
       const successPromise = createCodeBuddyPollPromise({
         deviceCode: deviceData.device_code,
         pollToken: this.pollToken,
+        proxyUrl: account.oauthProxyUrl,
         signal: pollController.signal,
         shouldCancel: () => job.cancelRequested,
         pollIntervalMs: this.pollIntervalMs,

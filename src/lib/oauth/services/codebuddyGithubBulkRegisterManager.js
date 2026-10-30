@@ -369,27 +369,25 @@ export class CodeBuddyGithubBulkRegisterManager extends BaseBulkImportManager {
         // accounts within seconds, blocking OAuth SSO downstream.
         humanize: true,
       }),
+      configureJob: (job) => {
+        job.proxyPoolId = resolvedProxy.proxyPoolId || null;
+        job.proxySource = resolvedProxy.proxySource || null;
+        job.socialProvider = "github-register";
+        job.headlessRequested = headless !== false;
+        job.batchInfo = {
+          requested: requestedCount,
+          allocated: targetCount,
+          available: uniqueProxies.size,
+          capped: requestedCount > uniqueProxies.size,
+        };
+        // Runtime credentials are attached before workers start, but remain
+        // excluded from sanitized snapshots and persisted job JSON.
+        job.accounts.forEach((account, index) => {
+          account.githubCredentials = parsedAccounts[index].githubCredentials;
+          account.oauthProxyUrl = proxyByLine.get(account.line);
+        });
+      },
     });
-    const job = this.jobs.get(sanitizedJob.jobId);
-    if (job) {
-      job.proxyPoolId = resolvedProxy.proxyPoolId || null;
-      job.proxySource = resolvedProxy.proxySource || null;
-      job.socialProvider = "github-register";
-      job.headlessRequested = headless !== false;
-      job.batchInfo = {
-        requested: requestedCount,
-        allocated: targetCount,
-        available: uniqueProxies.size,
-        capped: requestedCount > uniqueProxies.size,
-      };
-      // Attach per-account GitHub credentials to the live account objects.
-      // These fields are stripped in sanitizeAccount so the persisted JSON
-      // never leaks them.
-      job.accounts.forEach((account, index) => {
-        const source = parsedAccounts[index];
-        account.githubCredentials = source.githubCredentials;
-      });
-    }
     return this.getJob(sanitizedJob.jobId);
   }
 
@@ -510,7 +508,7 @@ export class CodeBuddyGithubBulkRegisterManager extends BaseBulkImportManager {
       this.setAccountStep(account, "github_signup_completed", `GitHub account ${signupResult.username} ready; opening CodeBuddy OAuth`);
 
       // ── Phase B: CodeBuddy device-code OAuth via GitHub SSO ──────────
-      const deviceData = await this.requestDeviceCode(CODEBUDDY_PROVIDER_ID);
+      const deviceData = await this.requestDeviceCode(CODEBUDDY_PROVIDER_ID, { proxyUrl: account.oauthProxyUrl });
       const authUrl = normalizeCodeBuddyAuthUrl(deviceData.verification_uri, deviceData.device_code);
       if (!authUrl || !deviceData.device_code) {
         throw new Error("CodeBuddy did not return an OAuth login URL");
@@ -523,6 +521,7 @@ export class CodeBuddyGithubBulkRegisterManager extends BaseBulkImportManager {
       const successPromise = createCodeBuddyPollPromise({
         deviceCode: deviceData.device_code,
         pollToken: this.pollToken,
+        proxyUrl: account.oauthProxyUrl,
         signal: pollController.signal,
         shouldCancel: () => job.cancelRequested,
         pollIntervalMs: this.pollIntervalMs,

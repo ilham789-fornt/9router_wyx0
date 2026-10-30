@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { CodeBuddyBulkImportManager } from "../../src/lib/oauth/services/codebuddyBulkImportManager.js";
+import {
+  CodeBuddyBulkImportManager,
+  describeCodeBuddyProxyHandshakeError,
+} from "../../src/lib/oauth/services/codebuddyBulkImportManager.js";
 
 function createFakeBrowser({ onGoto, cookies = [], evaluate = async () => null, initialUrl = "about:blank", urlRef = null, regionPageCount = 0 } = {}) {
   let currentUrl = initialUrl;
@@ -64,8 +67,105 @@ async function waitFor(fn, timeoutMs = 3000) {
 }
 
 describe("CodeBuddyBulkImportManager", () => {
+  it("turns opaque proxy handshake failures into actionable credential guidance", () => {
+    const error = new TypeError("fetch failed", {
+      cause: new Error("CONNECT tunnel failed, response 407 NO_USER"),
+    });
+
+    expect(describeCodeBuddyProxyHandshakeError(error)).toBe(
+      "The selected proxy rejected authentication (HTTP 407). Add valid proxy credentials or choose another proxy pool."
+    );
+  });
+
+  it("sanitizes generic and non-407 proxy handshake failures", () => {
+    const transportError = new TypeError("fetch failed", {
+      cause: new Error("CONNECT proxy.private.example:8443 failed with ECONNRESET for user:secret"),
+    });
+    const unknownError = new Error("proxy http://user:secret@proxy.private.example rejected an unexpected protocol");
+
+    expect(describeCodeBuddyProxyHandshakeError(transportError)).toBe(
+      "The selected proxy could not reach the CodeBuddy OAuth endpoint over HTTPS. Verify HTTP CONNECT port 443 support, proxy credentials, and the proxy allowlist."
+    );
+    expect(describeCodeBuddyProxyHandshakeError(unknownError)).toBe(
+      "CodeBuddy OAuth handshake through the selected proxy failed. Verify the proxy configuration or choose another proxy pool."
+    );
+    expect(describeCodeBuddyProxyHandshakeError(unknownError)).not.toContain("secret");
+    expect(describeCodeBuddyProxyHandshakeError(unknownError)).not.toContain("proxy.private.example");
+  });
+
+  it("marks a proxy OAuth job failed when its device handshake cannot start", async () => {
+    const manager = new CodeBuddyBulkImportManager({
+      proxyResolver: async () => ({
+        proxyUrl: "http://user:secret@proxy.example:8080",
+        proxyUrls: ["http://user:secret@proxy.example:8080"],
+        proxyPoolId: "pool-failing",
+        proxySource: "pool",
+        error: null,
+      }),
+      proxyBrowserPicker: async ({ proxyUrls, browserLauncher }) => ({
+        browser: await browserLauncher("camofox", { headless: false, proxy: proxyUrls[0] }),
+        proxyUrl: proxyUrls[0],
+        checked: 1,
+        error: null,
+      }),
+      browserLauncher: async () => createFakeBrowser(),
+      requestDeviceCodeFn: async () => {
+        throw new TypeError("fetch failed", {
+          cause: new Error("CONNECT tunnel failed, response 407 NO_USER"),
+        });
+      },
+    });
+
+    const started = await manager.startJob({ wrapLogin: true, proxyPoolId: "pool-failing" });
+    const failed = await waitFor(() => {
+      const current = manager.getJob(started.jobId);
+      return current?.status === "failed" ? current : null;
+    });
+
+    expect(failed.summary.failed).toBe(1);
+    expect(failed.error).toContain("HTTP 407");
+    expect(failed.accounts[0].currentStep).toBe("failed");
+    expect(JSON.stringify(failed)).not.toContain("secret");
+    expect(JSON.stringify(failed)).not.toContain("proxy.example");
+  });
+
+  it("attaches proxy OAuth mode before the job runner can observe the job", async () => {
+    const manager = new CodeBuddyBulkImportManager({
+      proxyResolver: async () => ({
+        proxyUrl: "http://127.0.0.1:8080",
+        proxyUrls: ["http://127.0.0.1:8080"],
+        proxyPoolId: "pool-atomic",
+        proxySource: "pool",
+        error: null,
+      }),
+      proxyBrowserPicker: async ({ browserLauncher }) => ({
+        browser: await browserLauncher("camofox", { headless: false, proxy: "http://127.0.0.1:8080" }),
+        proxyUrl: "http://127.0.0.1:8080",
+        checked: 1,
+        error: null,
+      }),
+      browserLauncher: async () => createFakeBrowser(),
+    });
+    let observedJob = null;
+    manager.runJob = async (jobId) => {
+      observedJob = manager.jobs.get(jobId);
+    };
+
+    await manager.startJob({ wrapLogin: true, proxyPoolId: "pool-atomic" });
+
+    expect(observedJob).toMatchObject({
+      wrapLogin: true,
+      proxyPoolId: "pool-atomic",
+      proxySource: "pool",
+      proxyChecked: 1,
+      humanMode: false,
+    });
+    expect(observedJob.accounts[0].proxyWrappedLogin).toBe(true);
+  });
+
   it("runs bulk GSuite accounts through CodeBuddy polling and saves connections", async () => {
     const saved = [];
+    const handshakes = [];
     const manager = new CodeBuddyBulkImportManager({
       proxyResolver: async () => ({
         proxyUrls: ["http://proxy-1:8080", "http://proxy-2:8080"],
@@ -74,18 +174,24 @@ describe("CodeBuddyBulkImportManager", () => {
         error: null,
       }),
       browserLauncher: async () => createFakeBrowser(),
-      requestDeviceCodeFn: async () => ({
-        device_code: "state-1",
-        verification_uri: "https://copilot.tencent.com/login",
-      }),
-      pollToken: async () => ({
-        success: true,
-        tokens: {
-          accessToken: "access-1",
-          refreshToken: "refresh-1",
-          expiresIn: 86400,
-        },
-      }),
+      requestDeviceCodeFn: async (_providerId, options) => {
+        handshakes.push({ phase: "state", proxyUrl: options?.proxyUrl });
+        return {
+          device_code: "state-1",
+          verification_uri: "https://copilot.tencent.com/login",
+        };
+      },
+      pollToken: async (_providerId, _deviceCode, extraData) => {
+        handshakes.push({ phase: "poll", proxyUrl: extraData?.proxyUrl });
+        return {
+          success: true,
+          tokens: {
+            accessToken: "access-1",
+            refreshToken: "refresh-1",
+            expiresIn: 86400,
+          },
+        };
+      },
       createApiKeyTokens: async ({ tokens, email }) => ({
         ...tokens,
         apiKey: `cb-key-${email}`,
@@ -131,6 +237,45 @@ describe("CodeBuddyBulkImportManager", () => {
     ]);
     expect(saved.every((entry) => entry.tokens.isActive === false)).toBe(true);
     expect(finishedJob.accounts.every((account) => account.connectionId)).toBe(true);
+    expect(handshakes).toEqual(expect.arrayContaining([
+      { phase: "state", proxyUrl: "http://proxy-1:8080" },
+      { phase: "poll", proxyUrl: "http://proxy-1:8080" },
+      { phase: "state", proxyUrl: "http://proxy-2:8080" },
+      { phase: "poll", proxyUrl: "http://proxy-2:8080" },
+    ]));
+    expect(JSON.stringify(finishedJob)).not.toContain("proxy-1");
+    expect(JSON.stringify(finishedJob)).not.toContain("proxy-2");
+  });
+
+  it("sanitizes a bulk GSuite proxy handshake failure before persisting it", async () => {
+    const manager = new CodeBuddyBulkImportManager({
+      proxyResolver: async () => ({
+        proxyUrls: ["http://user:secret@bulk-proxy.example:8080"],
+        proxyPoolId: "pool-bulk-failure",
+        proxySource: "pool",
+        error: null,
+      }),
+      browserLauncher: async () => createFakeBrowser(),
+      requestDeviceCodeFn: async () => {
+        throw new TypeError("fetch failed", {
+          cause: new Error("CONNECT bulk-proxy.example failed with ECONNRESET for user:secret"),
+        });
+      },
+    });
+
+    const started = await manager.startJob({
+      accounts: ["user@example.com|password"],
+      concurrency: 1,
+      proxyPoolId: "pool-bulk-failure",
+    });
+    const failed = await waitFor(() => {
+      const current = manager.getJob(started.jobId);
+      return current?.status === "failed" ? current : null;
+    });
+
+    expect(failed.error).toContain("could not reach the CodeBuddy OAuth endpoint over HTTPS");
+    expect(JSON.stringify(failed)).not.toContain("secret");
+    expect(JSON.stringify(failed)).not.toContain("bulk-proxy.example");
   });
 
   it("retries transient CodeBuddy token request failures before saving", async () => {
@@ -192,6 +337,63 @@ describe("CodeBuddyBulkImportManager", () => {
 
     expect(attempts).toBe(3);
     expect(finishedJob.summary.success).toBe(1);
+  });
+
+  it("saves OAuth credentials when a free account cannot create a personal API key", async () => {
+    const saved = [];
+    const manager = new CodeBuddyBulkImportManager({
+      proxyResolver: async () => ({ proxyUrls: ["http://proxy-1:8080"], proxyPoolId: "pool-free", proxySource: "pool", error: null }),
+      browserLauncher: async () => createFakeBrowser(),
+      requestDeviceCodeFn: async () => ({ device_code: "state-free", verification_uri: "https://www.codebuddy.ai/login" }),
+      pollToken: async () => ({ success: true, tokens: { accessToken: "access-free", refreshToken: "refresh-free" } }),
+      googleAutomation: async ({ successPromise }) => ({ status: "success", ...(await successPromise) }),
+      createApiKeyTokens: async () => {
+        throw new Error("CodeBuddy API key creation failed (12602): personal API key creation requires a paid subscription");
+      },
+      saveConnection: async (payload) => {
+        saved.push(payload);
+        return { connection: { id: "conn-free" } };
+      },
+    });
+
+    const started = await manager.startJob({ accounts: ["free@example.com|password"], concurrency: 1, proxyPoolId: "pool-free" });
+    const finished = await waitFor(() => {
+      const current = manager.getJob(started.jobId);
+      return current?.status === "completed" ? current : null;
+    });
+
+    expect(finished.summary.success).toBe(1);
+    expect(finished.activity.map((entry) => entry.step)).toContain("codebuddy_oauth_fallback");
+    expect(saved[0].tokens).toMatchObject({
+      accessToken: "access-free",
+      refreshToken: "refresh-free",
+      providerSpecificData: {
+        authKind: "access_token",
+        apiKeyUnavailable: true,
+        apiKeyUnavailableReason: "paid_subscription_required",
+      },
+    });
+    expect(saved[0].tokens.apiKey).toBeUndefined();
+  });
+
+  it("keeps unrelated API key creation failures terminal", async () => {
+    const manager = new CodeBuddyBulkImportManager({
+      proxyResolver: async () => ({ proxyUrls: ["http://proxy-1:8080"], proxyPoolId: "pool-error", proxySource: "pool", error: null }),
+      browserLauncher: async () => createFakeBrowser(),
+      requestDeviceCodeFn: async () => ({ device_code: "state-error", verification_uri: "https://www.codebuddy.ai/login" }),
+      pollToken: async () => ({ success: true, tokens: { accessToken: "access-error" } }),
+      googleAutomation: async ({ successPromise }) => ({ status: "success", ...(await successPromise) }),
+      createApiKeyTokens: async () => { throw new Error("CodeBuddy API key creation failed (500): upstream unavailable"); },
+    });
+
+    const started = await manager.startJob({ accounts: ["error@example.com|password"], concurrency: 1, proxyPoolId: "pool-error" });
+    const failed = await waitFor(() => {
+      const current = manager.getJob(started.jobId);
+      return current?.status === "failed" ? current : null;
+    });
+
+    expect(failed.summary.failed).toBe(1);
+    expect(failed.error).toContain("upstream unavailable");
   });
 
   it("launches a separate browser with a unique pool proxy for every bulk account", async () => {
@@ -337,6 +539,7 @@ describe("CodeBuddyBulkImportManager", () => {
     const saved = [];
     let googleCalls = 0;
     let apiKeyCalls = 0;
+    const handshakeCalls = [];
     const manager = new CodeBuddyBulkImportManager({
       proxyResolver: async ({ proxyPoolId }) => ({
         proxyUrl: "socks5://user:pass@127.0.0.1:1080",
@@ -358,15 +561,17 @@ describe("CodeBuddyBulkImportManager", () => {
           cookies: [{ name: "session", value: "cookie-1", domain: ".codebuddy.ai" }],
         });
       },
-      requestDeviceCodeFn: async (providerId) => {
+      requestDeviceCodeFn: async (providerId, options) => {
         expect(providerId).toBe("codebuddy");
+        handshakeCalls.push({ phase: "state", proxyUrl: options?.proxyUrl });
         return {
           device_code: "global-state-1",
           verification_uri: "https://www.codebuddy.ai/login?platform=CLI&state=global-state-1",
         };
       },
-      pollToken: async (providerId) => {
+      pollToken: async (providerId, _deviceCode, extraData) => {
         expect(providerId).toBe("codebuddy");
+        handshakeCalls.push({ phase: "poll", proxyUrl: extraData?.proxyUrl });
         return {
           success: true,
           tokens: { accessToken: "access-global", refreshToken: "refresh-global" },
@@ -400,6 +605,10 @@ describe("CodeBuddyBulkImportManager", () => {
     expect(openedUrls).toEqual(["https://www.codebuddy.ai/login?platform=CLI&state=global-state-1"]);
     expect(googleCalls).toBe(0);
     expect(apiKeyCalls).toBe(0);
+    expect(handshakeCalls).toEqual([
+      { phase: "state", proxyUrl: "socks5://user:pass@127.0.0.1:1080" },
+      { phase: "poll", proxyUrl: "socks5://user:pass@127.0.0.1:1080" },
+    ]);
     expect(saved).toEqual([expect.objectContaining({
       wrapLogin: true,
       proxyPoolId: "pool-global",

@@ -6,6 +6,7 @@
 // Ensure outbound fetch respects HTTP(S)_PROXY/ALL_PROXY in Node runtime
 import "open-sse/index.js";
 import crypto from "crypto";
+import { proxyAwareFetch } from "open-sse/utils/proxyFetch.js";
 
 import { generatePKCE, generateState } from "./utils/pkce";
 import {
@@ -64,8 +65,8 @@ function createCodeBuddyDeviceProvider(config) {
   return {
     config,
     flowType: "device_code",
-    requestDeviceCode: async (config) => {
-      const response = await fetch(`${config.stateUrl}?platform=${config.platform}`, {
+    requestDeviceCode: async (config, _codeChallenge, options = {}) => {
+      const response = await proxyAwareFetch(`${config.stateUrl}?platform=${config.platform}`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -80,7 +81,11 @@ function createCodeBuddyDeviceProvider(config) {
           "X-Product": "SaaS",
         },
         body: "{}",
-      });
+      }, options.proxyUrl ? {
+        enabled: true,
+        url: options.proxyUrl,
+        strictProxy: true,
+      } : null);
       if (!response.ok) throw new Error(`CodeBuddy state request failed: ${await response.text()}`);
       const data = await response.json();
       if (data.code !== 0 || !data.data?.state || !data.data?.authUrl) {
@@ -94,10 +99,10 @@ function createCodeBuddyDeviceProvider(config) {
         _isCodeBuddy: true,
       };
     },
-    pollToken: async (config, deviceCode) => {
+    pollToken: async (config, deviceCode, _codeVerifier, extraData = {}) => {
       const tokenUrl = new URL(config.tokenUrl);
       tokenUrl.searchParams.set("state", deviceCode);
-      const response = await fetch(tokenUrl.toString(), {
+      const response = await proxyAwareFetch(tokenUrl.toString(), {
         method: "GET",
         headers: {
           Accept: "application/json",
@@ -110,7 +115,11 @@ function createCodeBuddyDeviceProvider(config) {
           "X-No-Department-Info": "true",
           "X-Product": "SaaS",
         },
-      });
+      }, extraData.proxyUrl ? {
+        enabled: true,
+        url: extraData.proxyUrl,
+        strictProxy: true,
+      } : null);
       if (!response.ok) {
         const errorText = await response.text().catch(() => "");
         return {

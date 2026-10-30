@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import crypto from "crypto";
+import https from "node:https";
 import { createProviderConnection } from "@/models";
 import { assertProviderEnabled } from "@/lib/providerDisabled";
 
@@ -146,11 +147,19 @@ function makeSapisidHash(sapisid, origin = "https://gemini.google.com") {
   return `SAPISIDHASH ${ts}_${hash}`;
 }
 
+const PROBE_TIMEOUT_MS = 30_000;
+// gemini.google.com/app returns ~29 KB of response headers (a ~20 KB
+// Content-Security-Policy plus reporting-endpoints). undici/`fetch` enforces a
+// 16 KB default and rejects the whole request with "Headers Overflow Error"
+// before the status is ever readable, so the probe uses node:https with an
+// explicit header budget instead.
+const PROBE_MAX_HEADER_BYTES = 256 * 1024;
+
 /**
  * Probe gemini.google.com/app to confirm the session is alive.
- * Returns { ok, status, body? } — non-2xx without body means session dead.
+ * Returns { ok, status, xsrfToken?, error? } — non-2xx without body means session dead.
  */
-async function probeSession(cookieString, sapisid) {
+function probeSession(cookieString, sapisid) {
   const headers = {
     "Cookie": cookieString,
     "Origin": "https://gemini.google.com",
@@ -163,27 +172,47 @@ async function probeSession(cookieString, sapisid) {
   if (sapisid) {
     headers["Authorization"] = makeSapisidHash(sapisid);
   }
-  let res;
-  try {
-    res = await fetch("https://gemini.google.com/app", { method: "GET", headers });
-  } catch (err) {
-    return { ok: false, status: 0, error: `Network error: ${err.message}` };
-  }
-  // 200 OK is the success path. Google sometimes returns 302 to a sign-in page
-  // when cookies are stale — that's a fail.
-  if (res.status === 200) {
-    let body = "";
-    try { body = await res.text(); } catch { /* noop */ }
-    // Heuristic: a logged-in app page contains the SNlM0e token in the HTML.
-    // If we see it, we're definitely authenticated. If not, still treat as ok
-    // when status is 200, but flag in the response.
-    const xsrfMatch = body.match(/"SNlM0e":"([^"]+)"/);
-    return { ok: true, status: 200, xsrfToken: xsrfMatch ? xsrfMatch[1] : null };
-  }
-  if (res.status === 302 || res.status === 401 || res.status === 403) {
-    return { ok: false, status: res.status, error: "Session expired or cookies invalid (Google returned redirect/auth error)." };
-  }
-  return { ok: false, status: res.status, error: `Unexpected upstream status: ${res.status}` };
+
+  return new Promise((resolve) => {
+    const req = https.request(
+      "https://gemini.google.com/app",
+      { method: "GET", headers, maxHeaderSize: PROBE_MAX_HEADER_BYTES },
+      (res) => {
+        const status = res.statusCode || 0;
+        // Stale cookies bounce to the sign-in flow instead of returning 200.
+        if (status >= 300 && status < 400) {
+          res.resume();
+          resolve({ ok: false, status, error: "Session expired or cookies invalid (Google returned redirect/auth error)." });
+          return;
+        }
+        if (status === 401 || status === 403) {
+          res.resume();
+          resolve({ ok: false, status, error: "Session expired or cookies invalid (Google returned redirect/auth error)." });
+          return;
+        }
+        let body = "";
+        res.setEncoding("utf8");
+        res.on("data", (chunk) => { body += chunk; });
+        res.on("end", () => {
+          if (status === 200) {
+            // Heuristic: a logged-in app page contains the SNlM0e token in the
+            // HTML. If we see it, we're definitely authenticated. If not, still
+            // treat as ok when status is 200, but flag in the response.
+            const xsrfMatch = body.match(/"SNlM0e":"([^"]+)"/);
+            resolve({ ok: true, status: 200, xsrfToken: xsrfMatch ? xsrfMatch[1] : null });
+            return;
+          }
+          resolve({ ok: false, status, error: `Unexpected upstream status: ${status}` });
+        });
+        res.on("error", (err) => resolve({ ok: false, status: 0, error: `Network error: ${err.message}` }));
+      }
+    );
+    req.setTimeout(PROBE_TIMEOUT_MS, () => {
+      req.destroy(new Error(`probe timed out after ${PROBE_TIMEOUT_MS}ms`));
+    });
+    req.on("error", (err) => resolve({ ok: false, status: 0, error: `Network error: ${err.message}` }));
+    req.end();
+  });
 }
 
 export async function POST(request) {

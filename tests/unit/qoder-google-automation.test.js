@@ -523,6 +523,50 @@ describe("Qoder Google automation", () => {
     expect(consentPage.continueClicks).toBe(1);
   });
 
+  it("does not submit Google consent repeatedly while Lanjutkan is still loading", async () => {
+    let clicks = 0;
+    const continueLocator = createLocator({
+      async count() { return 1; },
+      async isVisible() { return true; },
+      async isEnabled() { return true; },
+      async boundingBox() { return { x: 700, y: 500, width: 120, height: 40 }; },
+      async innerText() { return "Lanjutkan"; },
+      async textContent() { return "Lanjutkan"; },
+    });
+    const page = createAutomationPage({
+      url: "https://accounts.google.com/signin/oauth/id",
+      text: "Login ke codebuddy.ai Google akan mengizinkan codebuddy.ai mengakses info tentang Anda Lanjutkan",
+    });
+    page.locator = (selector) => selector.includes("LgbsSe") || selector.includes("Lanjutkan")
+      ? continueLocator
+      : createLocator();
+    page.mouse = {
+      async move() { return null; },
+      async down() { return null; },
+      async up() { clicks += 1; },
+    };
+    page.evaluate = async (fn) => {
+      if (String(fn).includes("submit_approve_access")) return true;
+      if (String(fn).includes("document.body?.innerText")) {
+        return "Login ke codebuddy.ai Google akan mengizinkan codebuddy.ai mengakses info tentang Anda Lanjutkan";
+      }
+      return null;
+    };
+
+    const result = await runGoogleAccountAutomation({
+      page,
+      authUrl: "https://accounts.google.com/signin/oauth/id",
+      email: "user@example.com",
+      password: "password",
+      successPromise: neverResolves(),
+      shortTimeoutMs: 2_500,
+      serviceLabel: "CodeBuddy",
+    });
+
+    expect(result.status).toBe("needs_manual");
+    expect(clicks).toBe(1);
+  });
+
   it("clears a partial password before the final typing fallback", async () => {
     const passwordPage = createGooglePasswordFallbackPage();
 
@@ -556,6 +600,84 @@ describe("Qoder Google automation", () => {
 
     expect(result.status).toBe("success");
     expect(passwordPage.nextClicks).toBe(1);
+  });
+
+  it("waits once and scrolls after password submission before handling a new Workspace consent page", async () => {
+    let passwordVisible = true;
+    let passwordValue = "";
+    let resolveSuccess;
+    let settleWaits = 0;
+    let scrolls = 0;
+    const steps = [];
+    const successPromise = new Promise((resolve) => { resolveSuccess = resolve; });
+    const passwordLocator = createLocator({
+      async count() { return passwordVisible ? 1 : 0; },
+      async isVisible() { return passwordVisible; },
+      async isEnabled() { return true; },
+      async fill(value) { passwordValue = value; },
+      async inputValue() { return passwordValue; },
+    });
+    const nextLocator = createLocator({
+      async count() { return passwordVisible ? 1 : 0; },
+      async isVisible() { return passwordVisible; },
+      async isEnabled() { return true; },
+      async click() { passwordVisible = false; },
+    });
+    const consentLocator = createLocator({
+      async count() { return passwordVisible ? 0 : 1; },
+      async isVisible() { return !passwordVisible; },
+      async isEnabled() { return true; },
+      async boundingBox() { return { x: 700, y: 500, width: 120, height: 40 }; },
+      async innerText() { return "Lanjutkan"; },
+      async textContent() { return "Lanjutkan"; },
+    });
+    const page = createAutomationPage({
+      url: "https://accounts.google.com/signin/oauth/id",
+      text: "Google akan mengizinkan codebuddy.ai mengakses info tentang Anda Lanjutkan",
+    });
+    page.locator = (selector) => {
+      if (selector === 'input[type="password"]') return passwordLocator;
+      if (selector === "#passwordNext button") return nextLocator;
+      if (selector.includes("LgbsSe") || selector.includes("Lanjutkan")) return consentLocator;
+      return createLocator();
+    };
+    page.waitForTimeout = async (ms) => {
+      if (ms === 12_000) settleWaits += 1;
+    };
+    page.evaluate = async (fn) => {
+      const source = String(fn);
+      if (source.includes("root.scrollTop = 0")) {
+        scrolls += 1;
+        return null;
+      }
+      if (source.includes("submit_approve_access")) return true;
+      if (source.includes("document.body?.innerText")) {
+        return "Google akan mengizinkan codebuddy.ai mengakses info tentang Anda Lanjutkan";
+      }
+      return null;
+    };
+    page.mouse = {
+      async move() { return null; },
+      async down() { return null; },
+      async up() { resolveSuccess({ tokens: { accessToken: "workspace-new" } }); },
+    };
+
+    const result = await runGoogleAccountAutomation({
+      page,
+      authUrl: "https://accounts.google.com/signin/oauth/id",
+      email: "new-workspace@example.com",
+      password: "password",
+      successPromise,
+      shortTimeoutMs: 5_000,
+      serviceLabel: "CodeBuddy",
+      onStep: (step) => steps.push(step),
+    });
+
+    expect(result).toMatchObject({ status: "success", tokens: { accessToken: "workspace-new" } });
+    expect(settleWaits).toBe(1);
+    expect(scrolls).toBe(1);
+    expect(steps).toContain("settling_google_after_password");
+    expect(steps).toContain("google_post_password_ready");
   });
 
   it("does not click QoderWork marketing cards as account selectors", async () => {
@@ -813,6 +935,88 @@ describe("Qoder Google automation", () => {
     expect(steps).toContain("retrying_google_generic_error");
     expect(steps).toContain("qoder_token_received");
     expect(steps).not.toContain("google_generic_error_blocked");
+  });
+
+  it("recovers from Google's post-password error page when its Material control is labeled Next", async () => {
+    let errorText = "Something went wrong Sorry, something went wrong there. Try again.";
+    let recovered = false;
+    let resolveSuccess;
+    const successPromise = new Promise((resolve) => { resolveSuccess = resolve; });
+    const nextLocator = createLocator({
+      async count() { return recovered ? 0 : 1; },
+      async isVisible() { return !recovered; },
+      async isEnabled() { return true; },
+      async click() {
+        recovered = true;
+        errorText = "CodeBuddy wants to access your Google Account";
+        resolveSuccess({ tokens: { accessToken: "access-after-next" } });
+      },
+    });
+    const page = createAutomationPage({
+      url: "https://accounts.google.com/signin/v2/sl/error",
+      text: errorText,
+    });
+    page.locator = (selector) => {
+      if (selector === '[jsname="LgbsSe"]:has-text("Next")') return nextLocator;
+      return createLocator();
+    };
+    page.evaluate = async (fn) => {
+      if (String(fn).includes("document.body?.innerText")) return errorText;
+      return null;
+    };
+
+    const steps = [];
+    const result = await runGoogleAccountAutomation({
+      page,
+      authUrl: "https://accounts.google.com/signin/v2/sl/error",
+      email: "user@example.com",
+      password: "password",
+      successPromise,
+      shortTimeoutMs: 4_000,
+      serviceLabel: "CodeBuddy",
+      onStep: (step) => steps.push(step),
+    });
+
+    expect(result).toMatchObject({
+      status: "success",
+      tokens: { accessToken: "access-after-next" },
+    });
+    expect(steps).toContain("retrying_google_generic_error");
+    expect(steps).not.toContain("manual_assist_required");
+  });
+
+  it("handles a Spanish generic error before the speedbump handler can loop on Siguiente", async () => {
+    let recoveryClicks = 0;
+    const nextLocator = createLocator({
+      async count() { return 1; },
+      async isVisible() { return true; },
+      async isEnabled() { return true; },
+      async click() { recoveryClicks += 1; },
+    });
+    const page = createAutomationPage({
+      url: "https://accounts.google.com/speedbump/error",
+      text: "Se produjo un error. Vuelve a intentarlo. Siguiente",
+    });
+    page.locator = (selector) => selector.includes("Siguiente") ? nextLocator : createLocator();
+    const steps = [];
+
+    const result = await runGoogleAccountAutomation({
+      page,
+      authUrl: "https://accounts.google.com/speedbump/error",
+      email: "user@example.com",
+      password: "password",
+      successPromise: neverResolves(),
+      shortTimeoutMs: 8_000,
+      serviceLabel: "CodeBuddy",
+      onStep: (step) => steps.push(step),
+    });
+
+    expect(result.status).toBe("failed");
+    expect(result.error).toContain("server-side block");
+    expect(recoveryClicks).toBe(3);
+    expect(steps).toContain("google_generic_error_blocked");
+    expect(steps).not.toContain("approving_google_speedbump");
+    expect(steps).not.toContain("manual_assist_required");
   });
 
   it("types the Google email via page.keyboard when locator.fill is rejected by Google", async () => {

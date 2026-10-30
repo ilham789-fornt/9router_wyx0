@@ -37,6 +37,7 @@ Use Node 22 or newer. Camoufox is installed through the root package lifecycle a
 - Use `PascalCase` for React components, `camelCase` for functions and stores, and kebab-style test filenames such as `codebuddy-bulk-import-routes.test.js`.
 - Keep provider-specific code close to its domain, such as `open-sse/executors/*` or `src/lib/oauth/services/*`.
 - Prefer focused changes and preserve existing module boundaries unless a contract change is intentional and documented.
+- Automation jobs built on `BaseBulkImportManager` whose accounts all fail expose a failed top-level status rather than reporting completion.
 - Use Camoufox as the sole browser automation runtime. Do not add Playwright Chromium or installed-Chrome automation paths; `playwright-core` is retained only as Camoufox's transport dependency and must stay pinned to the version compatible with the installed Camoufox release.
 
 ## Testing Contracts

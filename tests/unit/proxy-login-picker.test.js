@@ -47,4 +47,18 @@ describe("OAuth login proxy picker", () => {
     expect(result).toMatchObject({ browser: { id: "browser-2" }, proxyUrl: "http://second:8080", checked: 2 });
     expect(browserLauncher).toHaveBeenCalledTimes(2);
   });
+
+  it("rejects an HTTP 407 preflight instead of launching the browser", async () => {
+    const browserLauncher = vi.fn();
+    const result = await launchWithWorkingLoginProxy({
+      proxyUrls: ["http://proxy.example:8080"],
+      testUrl: "https://www.codebuddy.ai/login",
+      testProxy: async () => ({ ok: false, status: 407, error: "Proxy Authentication Required" }),
+      browser: "camofox",
+      browserLauncher,
+    });
+
+    expect(result.proxyUrl).toBeNull();
+    expect(browserLauncher).not.toHaveBeenCalled();
+  });
 });

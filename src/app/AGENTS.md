@@ -26,6 +26,7 @@
 - Keep `/api/system/capacity` limited to coarse server CPU/RAM capacity data for local worker recommendations; do not expose sensitive host details.
 - Keep CodeBuddy CN out of the generic OAuth Providers section: its provider detail deep-links to the dedicated Automation tab, where OAuth and 5sim bulk registration remain separate modes.
 - Keep CodeBuddy CN 5sim quote/check routes under the dedicated automation API surface and return sanitized balance, stock, affordability, and proxy-route metadata only.
+- The gemini-web cookie probe must tolerate large response headers: gemini.google.com returns ~29 KB of them (a ~20 KB CSP), which exceeds undici's 16 KB default and fails as `Headers Overflow Error` before the status is readable, so the probe uses `node:https` with an explicit `maxHeaderSize`.
 - Do not silently change `/v1/*` compatibility semantics without focused regression tests.
 
 ## Work Guidance

@@ -38,6 +38,30 @@ const CODEBUDDY_API_KEYS_ENDPOINT = `${CODEBUDDY_BASE_URL}/console/api/client/v1
 const CODEBUDDY_TRIAL_ENDPOINT = `${CODEBUDDY_BASE_URL}/billing/ide/trial`;
 const CODEBUDDY_DEFAULT_USER_ENTERPRISE_ID = "personal-edition-user-id";
 
+function collectErrorDetails(error) {
+  const details = [];
+  let current = error;
+  for (let depth = 0; current && depth < 4; depth += 1) {
+    const message = String(current.message || "").trim();
+    const code = String(current.code || "").trim();
+    if (message && !details.includes(message)) details.push(message);
+    if (code && !details.includes(code)) details.push(code);
+    current = current.cause;
+  }
+  return details.join(": ");
+}
+
+export function describeCodeBuddyProxyHandshakeError(error) {
+  const details = collectErrorDetails(error);
+  if (/407|proxy authentication|required|no_user/i.test(details)) {
+    return "The selected proxy rejected authentication (HTTP 407). Add valid proxy credentials or choose another proxy pool.";
+  }
+  if (/connect|tunnel|econnrefused|econnreset|socket|timeout|timed out|cancelled|fetch failed/i.test(details)) {
+    return "The selected proxy could not reach the CodeBuddy OAuth endpoint over HTTPS. Verify HTTP CONNECT port 443 support, proxy credentials, and the proxy allowlist.";
+  }
+  return "CodeBuddy OAuth handshake through the selected proxy failed. Verify the proxy configuration or choose another proxy pool.";
+}
+
 export const CODEBUDDY_BULK_IMPORT_DEFAULT_CONCURRENCY = DEFAULT_CONCURRENCY;
 export const CODEBUDDY_BULK_IMPORT_MIN_CONCURRENCY = MIN_CONCURRENCY;
 export const CODEBUDDY_BULK_IMPORT_MAX_CONCURRENCY = MAX_CONCURRENCY;
@@ -122,14 +146,14 @@ async function defaultSaveCodeBuddyConnection({ tokens, email, wrapLogin = false
   return { connection };
 }
 
-async function defaultRequestDeviceCode(providerId) {
+async function defaultRequestDeviceCode(providerId, options) {
   const { requestDeviceCode } = await import("../providers.js");
-  return requestDeviceCode(providerId);
+  return requestDeviceCode(providerId, null, options);
 }
 
-async function defaultPollForToken(providerId, deviceCode) {
+async function defaultPollForToken(providerId, deviceCode, extraData) {
   const { pollForToken } = await import("../providers.js");
-  return pollForToken(providerId, deviceCode);
+  return pollForToken(providerId, deviceCode, null, extraData);
 }
 
 // ── Cookie Capture ─────────────────────────────────────────────────────────────
@@ -301,11 +325,37 @@ async function defaultCreateCodeBuddyApiKeyTokens({ page, tokens = {}, onStep })
   };
 }
 
+function isCodeBuddyPaidApiKeyRequiredError(error) {
+  return /\b12602\b|personal api key creation requires a paid subscription/i.test(String(error?.message || ""));
+}
+
+async function createCodeBuddyApiKeyOrOAuthFallback({ createApiKeyTokens, page, tokens, email, onStep }) {
+  try {
+    return await createApiKeyTokens({ page, tokens, email, onStep });
+  } catch (error) {
+    if (!isCodeBuddyPaidApiKeyRequiredError(error)) throw error;
+    onStep?.(
+      "codebuddy_oauth_fallback",
+      "CodeBuddy login succeeded, but this account requires a paid subscription to create a personal API key; saving OAuth credentials instead"
+    );
+    return {
+      ...tokens,
+      providerSpecificData: {
+        ...(tokens.providerSpecificData || {}),
+        authKind: "access_token",
+        apiKeyUnavailable: true,
+        apiKeyUnavailableReason: "paid_subscription_required",
+      },
+    };
+  }
+}
+
 // ── Token Polling ──────────────────────────────────────────────────────────────
 
 function createCodeBuddyPollPromise({
   deviceCode,
   pollToken,
+  proxyUrl,
   onStep,
   signal,
   shouldCancel,
@@ -331,7 +381,7 @@ function createCodeBuddyPollPromise({
       }
 
       pollAttempt += 1;
-      const result = await pollToken(CODEBUDDY_PROVIDER_ID, deviceCode);
+      const result = await pollToken(CODEBUDDY_PROVIDER_ID, deviceCode, { proxyUrl });
       if (result.success) {
         onStep?.("codebuddy_token_received", `CodeBuddy OAuth token received after ${pollAttempt} poll attempt${pollAttempt === 1 ? "" : "s"}`);
         return { tokens: result.tokens };
@@ -722,18 +772,19 @@ export class CodeBuddyBulkImportManager extends BaseBulkImportManager {
       prelaunchedBrowsers: wrapLogin && resolvedProxy.browser
         ? new Map([[normalizedAccounts[0].line, resolvedProxy.browser]])
         : null,
+      configureJob: (job) => {
+        job.wrapLogin = wrapLogin === true;
+        job.proxyPoolId = resolvedProxy?.proxyPoolId || null;
+        job.proxySource = resolvedProxy?.proxySource || null;
+        job.proxyChecked = resolvedProxy?.proxyChecked || null;
+        job.oauthProxyUrl = wrapLogin ? resolvedProxy?.proxyUrl || null : null;
+        job.oauthProxyByLine = proxyByLine;
+        job.humanMode = humanMode === true;
+        job.accounts.forEach((account) => {
+          account.proxyWrappedLogin = wrapLogin === true;
+        });
+      },
     });
-    const job = this.jobs.get(sanitizedJob.jobId);
-    if (job) {
-      job.wrapLogin = wrapLogin === true;
-      job.proxyPoolId = resolvedProxy?.proxyPoolId || null;
-      job.proxySource = resolvedProxy?.proxySource || null;
-      job.proxyChecked = resolvedProxy?.proxyChecked || null;
-      job.humanMode = humanMode === true;
-      job.accounts.forEach((account) => {
-        account.proxyWrappedLogin = wrapLogin === true;
-      });
-    }
     return this.getJob(sanitizedJob.jobId);
   }
 
@@ -784,7 +835,8 @@ export class CodeBuddyBulkImportManager extends BaseBulkImportManager {
           );
         }
 
-        const tokensWithApiKey = await this.createApiKeyTokens({
+        const tokensWithApiKey = await createCodeBuddyApiKeyOrOAuthFallback({
+          createApiKeyTokens: this.createApiKeyTokens,
           page: manualPage,
           tokens: result.tokens || {},
           email: account.email,
@@ -794,7 +846,9 @@ export class CodeBuddyBulkImportManager extends BaseBulkImportManager {
           },
         });
 
-        this.setAccountStep(account, "saving_connection", "Saving CodeBuddy API key connection");
+        this.setAccountStep(account, "saving_connection", tokensWithApiKey.apiKey
+          ? "Saving CodeBuddy API key connection"
+          : "Saving CodeBuddy OAuth connection without a personal API key");
         await this.persistJobSnapshot(job, { forcePreview: true });
         const tokensWithCookie = await attachCodeBuddyWebCookie(context, tokensWithApiKey, manualPage);
         const { connection } = await this.saveConnection({
@@ -805,7 +859,9 @@ export class CodeBuddyBulkImportManager extends BaseBulkImportManager {
         this.finalizeAccount(account, "success", {
           connectionId: connection.id,
           step: "connection_saved",
-          message: "CodeBuddy API key connection saved successfully",
+          message: tokensWithApiKey.apiKey
+            ? "CodeBuddy API key connection saved successfully"
+            : "CodeBuddy OAuth connection saved; personal API key requires a paid subscription",
         });
         await this.persistJobSnapshot(job, { forcePreview: true });
       } catch (error) {
@@ -851,8 +907,17 @@ export class CodeBuddyBulkImportManager extends BaseBulkImportManager {
       this.setAccountStep(account, "preparing_worker", `Worker ${workerId} is preparing a browser context`);
       await this.persistJobSnapshot(job, { forcePreview: true });
 
-      this.setAccountStep(account, "requesting_codebuddy_state", "Requesting CodeBuddy OAuth state");
-      const deviceData = await this.requestDeviceCode(CODEBUDDY_PROVIDER_ID);
+      this.setAccountStep(account, "requesting_codebuddy_state", "Requesting CodeBuddy OAuth state through the selected proxy");
+      const oauthProxyUrl = job.wrapLogin
+        ? job.oauthProxyUrl
+        : job.oauthProxyByLine?.get(account.line) || null;
+      let deviceData;
+      try {
+        deviceData = await this.requestDeviceCode(CODEBUDDY_PROVIDER_ID, { proxyUrl: oauthProxyUrl });
+      } catch (error) {
+        if (!oauthProxyUrl) throw error;
+        throw new Error(describeCodeBuddyProxyHandshakeError(error));
+      }
       const authUrl = normalizeCodeBuddyAuthUrl(deviceData.verification_uri, deviceData.device_code);
       if (!authUrl || !deviceData.device_code) {
         throw new Error("CodeBuddy did not return an OAuth login URL");
@@ -864,6 +929,7 @@ export class CodeBuddyBulkImportManager extends BaseBulkImportManager {
       const successPromise = createCodeBuddyPollPromise({
         deviceCode: deviceData.device_code,
         pollToken: this.pollToken,
+        proxyUrl: oauthProxyUrl,
         signal: pollController.signal,
         shouldCancel: () => job.cancelRequested,
         onPending: job.wrapLogin ? async (_result, pollAttempt) => {
@@ -1013,7 +1079,8 @@ export class CodeBuddyBulkImportManager extends BaseBulkImportManager {
           );
         }
 
-        const tokensWithApiKey = await this.createApiKeyTokens({
+        const tokensWithApiKey = await createCodeBuddyApiKeyOrOAuthFallback({
+          createApiKeyTokens: this.createApiKeyTokens,
           page,
           tokens: automationResult.tokens || {},
           email: account.email,
@@ -1023,7 +1090,9 @@ export class CodeBuddyBulkImportManager extends BaseBulkImportManager {
           },
         });
 
-        this.setAccountStep(account, "saving_connection", "Saving CodeBuddy API key connection");
+        this.setAccountStep(account, "saving_connection", tokensWithApiKey.apiKey
+          ? "Saving CodeBuddy API key connection"
+          : "Saving CodeBuddy OAuth connection without a personal API key");
         await this.persistJobSnapshot(job, { forcePreview: true });
         const tokensWithCookie = await attachCodeBuddyWebCookie(context, tokensWithApiKey, page);
         const { connection } = await this.saveConnection({
@@ -1033,7 +1102,9 @@ export class CodeBuddyBulkImportManager extends BaseBulkImportManager {
         this.finalizeAccount(account, "success", {
           connectionId: connection.id,
           step: "connection_saved",
-          message: "CodeBuddy API key connection saved successfully",
+          message: tokensWithApiKey.apiKey
+            ? "CodeBuddy API key connection saved successfully"
+            : "CodeBuddy OAuth connection saved; personal API key requires a paid subscription",
         });
         account.runtimeSession = null;
         await context.close().catch(() => null);

@@ -2,6 +2,8 @@ const DEFAULT_SHORT_TIMEOUT_MS = 90_000;
 const DEFAULT_MANUAL_TIMEOUT_MS = 15 * 60_000;
 const GOOGLE_EMAIL_TRANSITION_GRACE_MS = 6_000;
 const GOOGLE_PASSWORD_TRANSITION_GRACE_MS = 8_000;
+const GOOGLE_CONSENT_SUBMIT_GRACE_MS = 8_000;
+const GOOGLE_POST_PASSWORD_SETTLE_MS = 12_000;
 
 const EMAIL_INPUT_SELECTOR = '#identifierId, input[name="identifier"], input[type="email"], input[autocomplete="username"], input[aria-label*="Email" i], input[aria-label*="phone" i]';
 const PASSWORD_INPUT_SELECTOR = 'input[type="password"]';
@@ -389,8 +391,11 @@ const GOOGLE_GENERIC_ERROR_MARKERS = [
   "something went wrong",
   "terjadi kesalahan",
   "maaf, terjadi kesalahan",
+  "se produjo un error",
   "try again",
   "coba lagi",
+  "vuelve a intentarlo",
+  "volver a intentarlo",
 ];
 
 const GOOGLE_GENERIC_ERROR_RETRY_LIMIT = 3;
@@ -398,12 +403,23 @@ const GOOGLE_GENERIC_ERROR_RETRY_SELECTORS = [
   'button:has-text("Try again")',
   'button:has-text("Retry")',
   'button:has-text("Coba lagi")',
+  'button:has-text("Volver a intentarlo")',
   'div[role="button"]:has-text("Try again")',
   'div[role="button"]:has-text("Coba lagi")',
+  'div[role="button"]:has-text("Volver a intentarlo")',
   '#identifierNext button',
   '#passwordNext button',
+  '#next',
+  '#next button',
   'button:has-text("Next")',
   'button:has-text("Berikutnya")',
+  'button:has-text("Siguiente")',
+  'div[role="button"]:has-text("Next")',
+  'div[role="button"]:has-text("Berikutnya")',
+  'div[role="button"]:has-text("Siguiente")',
+  '[jsname="LgbsSe"]:has-text("Next")',
+  '[jsname="LgbsSe"]:has-text("Berikutnya")',
+  '[jsname="LgbsSe"]:has-text("Siguiente")',
 ];
 
 const GOOGLE_CONSENT_TEXT_PATTERN = /wants to access|ingin mengakses|akses ke akun google|choose what .* can access|grant .* access|akan mengizinkan .* mengakses|mengakses info tentang anda|login ke .*google akan mengizinkan/i;
@@ -823,6 +839,29 @@ async function handleGoogleCredentialInputs(page, email, password, reportStep, c
   return false;
 }
 
+async function settleGoogleAfterPassword(page, credentialState, reportStep) {
+  if (!credentialState?.passwordSubmittedAt || credentialState.postPasswordSettled) return false;
+  credentialState.postPasswordSettled = true;
+  reportStep(
+    "settling_google_after_password",
+    `Waiting ${GOOGLE_POST_PASSWORD_SETTLE_MS / 1000} seconds for Google to finish loading the post-password flow`
+  );
+  await page.waitForTimeout(GOOGLE_POST_PASSWORD_SETTLE_MS);
+  await page.evaluate(async () => {
+    const root = document.scrollingElement || document.documentElement || document.body;
+    if (!root) return;
+    root.scrollTop = 0;
+    window.scrollTo(0, 0);
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    const bottom = Math.max(root.scrollHeight, document.body?.scrollHeight || 0);
+    root.scrollTop = bottom;
+    window.scrollTo(0, bottom);
+  }).catch(() => null);
+  await page.waitForTimeout(500);
+  reportStep("google_post_password_ready", "Google post-password page settled and was scrolled for consent controls");
+  return true;
+}
+
 async function readPageText(page) {
   const chunks = [];
   for (const scope of getInteractionScopes(page)) {
@@ -1070,6 +1109,11 @@ async function handleGoogleConsent(page, reportStep, humanMode = false, options 
   const startUrl = safePageUrl(page);
   const startPathname = safeUrlPathname(startUrl);
   const successResolved = options.successResolved || (() => false);
+  const consentState = options.state || null;
+  if (consentState?.consentSubmittedAt
+    && Date.now() - consentState.consentSubmittedAt < GOOGLE_CONSENT_SUBMIT_GRACE_MS) {
+    return true;
+  }
 
   // Real mouse click first: on modern /signin/oauth/id and speedbump/*
   // consent surfaces Google's jscontroller ignores untrusted click events,
@@ -1085,23 +1129,22 @@ async function handleGoogleConsent(page, reportStep, humanMode = false, options 
     () => clickGoogleConsentByDom(page),
   ];
 
-  let anyClicked = false;
   for (const attempt of attempts) {
     const clicked = await attempt().catch(() => false);
     if (!clicked) continue;
-    anyClicked = true;
+    if (consentState) consentState.consentSubmittedAt = Date.now();
     reportStep("approving_google_consent", "Approving Google OAuth consent");
     await page.waitForTimeout(humanMode ? 800 : 300);
     if (successResolved()) return true;
     if (await hasNavigatedOffConsent(page, startUrl, startPathname)) return true;
-    // Still on the same consent surface and no token yet — Google likely
-    // ignored this click type. Try the next, more trusted, attempt.
+    // A trusted/locator click can leave the button spinning while a slow proxy
+    // submits the consent request. Do not send duplicate clicks in this tick;
+    // the outer loop will keep polling and the grace window above prevents a
+    // second submission while Google is still processing the first one.
+    return true;
   }
 
-  // If some attempt clicked but we could not observe navigation nor a token,
-  // return true anyway so the outer loop keeps polling (the token endpoint is
-  // the ultimate source of truth) instead of falling through to needs_manual.
-  return anyClicked;
+  return false;
 }
 
 function safePageUrl(page) {
@@ -1333,7 +1376,9 @@ async function handleGoogleOnboarding(page, pageText) {
   return false;
 }
 
-// Detects Google's generic "Something went wrong" page and clicks "Try again".
+// Detects Google's generic "Something went wrong" page and clicks its retry
+// control. Google labels this control either "Try again" or "Next", depending
+// on the account/login variant.
 // Scoped to accounts.google.* because the "try again" marker is broad and must
 // not fire on a provider page (e.g. Qoder) that happens to reuse the copy.
 // Returns one of:
@@ -2116,6 +2161,8 @@ export async function runGoogleAccountAutomation({
     emailSubmittedAt: 0,
     passwordSubmittedAt: 0,
     genericErrorRetries: 0,
+    consentSubmittedAt: 0,
+    postPasswordSettled: false,
   };
   let qoderDeviceAuthReopened = false;
   let kiroCallbackWaitReported = false;
@@ -2166,6 +2213,48 @@ export async function runGoogleAccountAutomation({
       continue;
     }
 
+    if (await settleGoogleAfterPassword(page, credentialState, reportStep)) {
+      continue;
+    }
+
+    // Generic Google error pages can share /speedbump/ URLs and Material
+    // controls with legitimate consent interstitials. Classify them first so
+    // the bounded recovery counter owns the retry instead of the speedbump
+    // handler clicking forever and eventually falling through to manual mode.
+    const text = await readPageText(page);
+    if (includesAny(text, MANUAL_ASSIST_MARKERS)) {
+      reportStep("manual_assist_required", "Google requested CAPTCHA, 2FA, recovery verification, or secure-browser verification");
+      return {
+        status: "needs_manual",
+        error: "Manual assist required in the browser session (CAPTCHA, 2FA, recovery, suspicious-login, or secure-browser challenge).",
+      };
+    }
+    if (isGoogleAuthPage(page) && includesAny(text, INVALID_CREDENTIAL_MARKERS)) {
+      reportStep("invalid_credentials", "Google rejected the supplied email or password");
+      return {
+        status: "failed_invalid_credentials",
+        error: "Google rejected the supplied email or password.",
+      };
+    }
+    const genericErrorResult = await handleGoogleGenericError(page, text, credentialState);
+    if (genericErrorResult.action === "retry") {
+      reportStep(
+        "retrying_google_generic_error",
+        `Google showed a generic error page; clicked its recovery button (${genericErrorResult.attempt}/${GOOGLE_GENERIC_ERROR_RETRY_LIMIT})`
+      );
+      continue;
+    }
+    if (genericErrorResult.action === "exhausted") {
+      reportStep(
+        "google_generic_error_blocked",
+        `Google kept showing a generic error page after ${GOOGLE_GENERIC_ERROR_RETRY_LIMIT} attempts; treating as a server-side block`
+      );
+      return {
+        status: "failed",
+        error: "Google blocked sign-in with a \"Something went wrong\" or localized generic error page. This is a server-side block on the account (rate limit or anti-bot); manual assist cannot fix it.",
+      };
+    }
+
     const handledSpeedbump = await handleGoogleSpeedbump(page, reportStep, humanMode);
     if (handledSpeedbump) {
       continue;
@@ -2184,6 +2273,7 @@ export async function runGoogleAccountAutomation({
 
     const handledGoogleConsent = await handleGoogleConsent(page, reportStep, humanMode, {
       successResolved: () => successPromiseResolved,
+      state: credentialState,
     });
     if (handledGoogleConsent) {
       continue;
@@ -2203,15 +2293,6 @@ export async function runGoogleAccountAutomation({
         await page.waitForTimeout(1500);
         continue;
       }
-    }
-
-    const text = await readPageText(page);
-    if (includesAny(text, MANUAL_ASSIST_MARKERS)) {
-      reportStep("manual_assist_required", "Google requested CAPTCHA, 2FA, recovery verification, or secure-browser verification");
-      return {
-        status: "needs_manual",
-        error: "Manual assist required in the browser session (CAPTCHA, 2FA, recovery, suspicious-login, or secure-browser challenge).",
-      };
     }
 
     if (!providerPage && includesAny(text, INVALID_CREDENTIAL_MARKERS)) {
@@ -2239,25 +2320,6 @@ export async function runGoogleAccountAutomation({
       return {
         status: "failed_restricted",
         error: "Account is restricted, suspended, or banned. Skipping.",
-      };
-    }
-
-    const genericErrorResult = await handleGoogleGenericError(page, text, credentialState);
-    if (genericErrorResult.action === "retry") {
-      reportStep(
-        "retrying_google_generic_error",
-        `Google showed a "Something went wrong" page; clicked Try again (${genericErrorResult.attempt}/${GOOGLE_GENERIC_ERROR_RETRY_LIMIT})`
-      );
-      continue;
-    }
-    if (genericErrorResult.action === "exhausted") {
-      reportStep(
-        "google_generic_error_blocked",
-        `Google kept showing a "Something went wrong" page after ${GOOGLE_GENERIC_ERROR_RETRY_LIMIT} attempts; treating as a server-side block`
-      );
-      return {
-        status: "failed",
-        error: "Google blocked sign-in with a \"Something went wrong\" page. This is a server-side block on the account (rate limit or anti-bot); manual assist cannot fix it.",
       };
     }
 
